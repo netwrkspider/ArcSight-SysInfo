@@ -22,7 +22,7 @@ Future:
     - Support for multiple output formats (XML,CSV,JSON,etc)
 """
 
-import os,sys,string,httplib,subprocess,re,time,glob,socket,logging
+import os,sys,string,httplib,subprocess,re,time,glob,socket,logging,json
 from datetime import datetime
 
 ###########################################
@@ -43,8 +43,23 @@ def runOSCommand(command):
         return "<Unknown (ERROR)> "
     return output
 
-class OS_Stats(object):
+class Stats(object):
     def __init__(self):
+        self.headers = []
+
+    def getDict(self):
+        return {}
+
+    def getJSON(self):
+        norm_dict = self.getDict()
+        json_dict = json.dumps(norm_dict)
+        return json_dict
+
+
+class OS_Stats(Stats):
+    def __init__(self):
+        self.headers = ["os version","python version","processor","memory","run level",
+                        "partitions","network","services","processes","selinux","ports"]
         self.version = self.getOSVersion()
         self.py_version = self.getPythonVersion()
         self.cpu = self.getCPUInfo()
@@ -57,18 +72,18 @@ class OS_Stats(object):
         self.selinux = self.getSELinuxStatus()
         self.ports = self.getUsedPorts()
 
-    def prettyPrint(self):
-        headers = ["os version","python version","processor","memory","run level","partitions",
-                   "network","services","processes","selinux","ports"]
+    def getDict(self):
         data = [self.version,self.py_version,self.cpu,self.memory,self.runlevel,self.partitions,
                 self.network,self.services,self.processes,self.selinux,self.ports]
+        return dict(zip(self.headers,data))
 
-        zipped_data = dict(zip(headers,data))
 
-        print("\n%s - %s\n" % (zipped_data["network"]["hostname"].upper().rjust(38), zipped_data["network"]["interfaces"][0]))
+    def prettyPrint(self):
+        data_dict = self.getDict()
+        print("\n%s - %s\n" % (data_dict["network"]["hostname"].upper().rjust(38), data_dict["network"]["interfaces"][0]))
         # Since dictionaries don't have an "order" each item must be called explicitly in the order we want
-        for i in headers:
-            printData({i : zipped_data[i]})
+        for i in self.headers:
+            printData({i : data_dict[i]})
 
     def getOSVersion(self):
         """
@@ -364,6 +379,7 @@ def getArcSightInfo():
 
 class Connector(object):
     def __init__(self,path):
+        self._headers = _headers = ["type","version","enabled","process status","service","path","folder size","old versions","destinations","map files","categorization files","log info","agent.log errors","wrapper.log errors","type specifics"]
         self.path           = path
         self.folder_size    = self.getFolderSize()
         self.service        = self.getServiceName()
@@ -380,12 +396,21 @@ class Connector(object):
         self.agent_errors   = self.getLogErrors("agent")
         self.wrapper_errors = self.getLogErrors("wrapper")
 
-    def prettyPrint(self):
-        _headers = ["type","version","enabled","process status","service","path","folder size","old versions","destinations","map files","categorization files","log info","agent.log errors","wrapper.log errors","type specifics"]
+
+    def getDict(self):
         _data = [self.type,self.version,self.enabled,self.process_status,self.service,self.path,self.folder_size,self.old_versions,self.destinations,self.map_files,self.cat_files,self.log_info,self.agent_errors,self.wrapper_errors,self.specifics]
-        _zipped_data = dict(zip(_headers,_data))
-        for i in _headers:
-            printData({i : _zipped_data[i]},1)
+        _zipped_data = dict(zip(self._headers,_data))
+        return _zipped_data
+
+    def getJSON(self):
+        norm_dict = self.getDict()
+        json_dict = json.dumps(norm_dict)
+        return json_dict
+
+    def prettyPrint(self):
+        data_dict = self.getDict()
+        for i in self._headers:
+            printData({i : data_dict[i]},1)
         print("")
 
     def getFolderSize(self):
@@ -932,6 +957,7 @@ def main():
     printHeader("SERVER INFORMATION")
     osData = OS_Stats()
     osData.prettyPrint()
+    print osData.getJSON()
 
     printHeader("ARCSIGHT INFORMATION")
     connectorList = getArcSightInfo()
@@ -939,6 +965,7 @@ def main():
         for index,connector in enumerate(connectorList):
             print("Connector " + str(index+1) + ": ")
             connector.prettyPrint()
+        json.dumps(connectorList)
     else:
         print("")
         print("No ArcSight connector services appear to be installed on this system.")
