@@ -5,24 +5,34 @@ ArcSight connector level issues.
 
 __author__ = "Adam Reber"
 __email__ = "adam.reber@gmail.com"
-__version__ = "0.5"
-__date__ = "05/09/2013"
+__version__ = "0.6"
+__date__ = "05/13/2013"
 __status__ = "Development"
 
 
 History:
-    0.1 (09/13/2012)
+    0.1 (09/13/2012) - Initial version
     0.2 (09/19/2012) - Added native grep-like function
     0.3 (10/16/2012) - Changed how connectors are detected, should now find all arcsight
-                       connectors under, even if they are not installed as a service.
+                       connectors under /, even if they are not installed as a service.
     0.4 (02/05/2013) - Modified to use class structure rather than dictionaries
     0.5 (05/09/2013) - Added connector-type specific attributes
+    0.6 (05/13/2013) - Added support for exporting data to pickled file
 
 Future:
     - Support for multiple output formats (XML,CSV,JSON,etc)
+    - Output logging
+    - Additional connector details based on type of connector
+      - Syslog: Listening port
+      - FlexConnector: Flex file details (MD5, time created)
+      - Oracle: DB connection info
+    - Send data to another server for central collection
+    - Config file to choose options
+    - Better support for Python 2.4 (RHEL 5 *sigh*)
+    - Better support for Solaris... maybe.
 """
 
-import os,sys,string,httplib,subprocess,re,time,glob,socket,logging,json
+import os,sys,string,httplib,subprocess,re,time,glob,socket,logging,json,pickle
 from datetime import datetime
 
 ###########################################
@@ -55,28 +65,36 @@ class Stats(object):
         json_dict = json.dumps(norm_dict)
         return json_dict
 
+    def pickleIt(self, file_name):
+        try:
+            f = open(file_name, 'wb')
+            norm_dict = self.getDict()
+            pickle.dump(norm_dict, f)
+        except IOError:
+            print "Error writing to file %s" % (file_name)
+            return
+
 
 class OS_Stats(Stats):
     def __init__(self):
         self.headers = ["os version","python version","processor","memory","run level",
                         "partitions","network","services","processes","selinux","ports"]
-        self.version = self.getOSVersion()
+        self.version    = self.getOSVersion()
         self.py_version = self.getPythonVersion()
-        self.cpu = self.getCPUInfo()
-        self.memory = self.getMemoryInfo()
+        self.cpu        = self.getCPUInfo()
+        self.memory     = self.getMemoryInfo()
         self.partitions = self.getPartitionInfo()
-        self.network = self.getNetworkInfo()
-        self.runlevel = self.getRunLevel()
-        self.services = self.getServices()
-        self.processes = self.getOSProcessStatus()
-        self.selinux = self.getSELinuxStatus()
-        self.ports = self.getUsedPorts()
+        self.network    = self.getNetworkInfo()
+        self.runlevel   = self.getRunLevel()
+        self.services   = self.getServices()
+        self.processes  = self.getOSProcessStatus()
+        self.selinux    = self.getSELinuxStatus()
+        self.ports      = self.getUsedPorts()
 
     def getDict(self):
         data = [self.version,self.py_version,self.cpu,self.memory,self.runlevel,self.partitions,
                 self.network,self.services,self.processes,self.selinux,self.ports]
         return dict(zip(self.headers,data))
-
 
     def prettyPrint(self):
         data_dict = self.getDict()
@@ -401,11 +419,6 @@ class Connector(object):
         _data = [self.type,self.version,self.enabled,self.process_status,self.service,self.path,self.folder_size,self.old_versions,self.destinations,self.map_files,self.cat_files,self.log_info,self.agent_errors,self.wrapper_errors,self.specifics]
         _zipped_data = dict(zip(self._headers,_data))
         return _zipped_data
-
-    def getJSON(self):
-        norm_dict = self.getDict()
-        json_dict = json.dumps(norm_dict)
-        return json_dict
 
     def prettyPrint(self):
         data_dict = self.getDict()
@@ -957,7 +970,7 @@ def main():
     printHeader("SERVER INFORMATION")
     osData = OS_Stats()
     osData.prettyPrint()
-    print osData.getJSON()
+    osData.pickleIt("OS_pickle.txt")
 
     printHeader("ARCSIGHT INFORMATION")
     connectorList = getArcSightInfo()
@@ -965,7 +978,7 @@ def main():
         for index,connector in enumerate(connectorList):
             print("Connector " + str(index+1) + ": ")
             connector.prettyPrint()
-        json.dumps(connectorList)
+        connectorList.pickleIt("AS_pickle.txt")
     else:
         print("")
         print("No ArcSight connector services appear to be installed on this system.")
