@@ -5,8 +5,8 @@ ArcSight connector level issues.
 
 __author__ = "Adam Reber"
 __email__ = "adam.reber@gmail.com"
-__version__ = "0.6"
-__date__ = "05/13/2013"
+__version__ = "0.7"
+__date__ = "05/23/2013"
 __status__ = "Development"
 
 
@@ -18,6 +18,7 @@ History:
     0.4 (02/05/2013) - Modified to use class structure rather than dictionaries
     0.5 (05/09/2013) - Added connector-type specific attributes
     0.6 (05/13/2013) - Added support for exporting data to pickled file
+    0.7 (05/23/2013) - Included failovers in destinations for connectors
 
 Future:
     - Support for multiple output formats (XML,CSV,JSON,etc)
@@ -32,7 +33,8 @@ Future:
     - Better support for Solaris... maybe.
 """
 
-import os,sys,string,httplib,subprocess,re,time,glob,socket,logging,json,pickle
+import os,sys,string,httplib,subprocess,re,time,glob,socket,logging,pickle
+#import json
 from datetime import datetime
 
 ###########################################
@@ -388,7 +390,7 @@ def getArcSightInfo():
           Output:
     """
     connectors = []
-    directories = runOSCommand("find / -wholename *current/user/agent 2> /dev/null")
+    directories = runOSCommand("find /opt -wholename *current/user/agent 2> /dev/null")
     for directory in directories.split("\n"):
         if directory:
             path = os.path.normpath(os.path.join(directory,"../.."))
@@ -403,7 +405,8 @@ class Connector(object):
         self.service        = self.getServiceName()
         self.version        = self.getConnectorVersion()
         self.type           = self.getConnectorType()
-        self.specifics      = self.getTypeSpecifics()
+        self.specifics      = ""
+#        self.specifics      = self.getTypeSpecifics()
         self.destinations   = self.getDestinations()
         self.enabled        = self.getAgentProperty("agents\[0\]\.enabled")
         self.cat_files      = getFilesInFolder(os.path.join(self.path,"user/agent/acp/categorizer/current"),".csv")
@@ -411,8 +414,8 @@ class Connector(object):
         self.old_versions   = self.getOldVersions()
         self.log_info       = self.getLogInfo()
         self.process_status = self.getProcessStatus()
-        self.agent_errors   = self.getLogErrors("agent")
-        self.wrapper_errors = self.getLogErrors("wrapper")
+        self.agent_errors   = self.getLogErrors("agent",10)
+        self.wrapper_errors = self.getLogErrors("wrapper",10)
 
 
     def getDict(self):
@@ -480,46 +483,68 @@ class Connector(object):
                 hosts[hostname][property] = self.getAgentProperty("agents\[0\].windowshoststable\[%d\].%s" % (i,property))
         return hosts
 
+    def getDestinationInfo(self,num,type="",fail_num=0):
+        host_regex = r".*\<Parameter Name\\=\"host\" Value\\=\"(?P<host>[0-9a-zA-Z\.-_]+)\".*"
+        port_regex = r".*\<Parameter Name\\=\"port\" Value\\=\"(?P<port>[0-9]+)\".*"
+        receiver_regex = r".*\<Parameter Name\\=\"rcvrname\" Value\\=\"(?P<receiver>[0-9a-zA-Z\ \.-_]+)\"/\>\\n.*"
+
+        if type == "failover":
+            opt_string = "\.failover\[%s\]" % fail_num
+        else:
+            opt_string = ""
+
+        dest = {}
+        dest["agentid"] = self.getAgentProperty("agents\[0\]\.destination\[%s\]%s\.agentid" % (num,opt_string))
+        dest["type"] = self.getAgentProperty("agents\[0\]\.destination\[%s\]%s\.type" % (num,opt_string))
+        dest["params"] = self.getAgentProperty("agents\[0\]\.destination\[%s\]%s\.params" % (num,opt_string))
+        match_host = re.match(host_regex,dest["params"])
+        dest_string = ""
+        if match_host:
+            dest["host"] = match_host.group("host")
+            match_port = re.match(port_regex,dest["params"])
+            if match_port:
+                dest["port"] = match_port.group("port")
+                if testConnection(dest["host"],dest["port"]):
+                    dest["status"] = "Reachable"
+                else:
+                    dest["status"] = "Unreachable"
+            else:
+                dest["port"] = "<Unknown>"
+                dest["status"] = "<Unknown>"
+
+            if dest["type"] == "loggersecure":
+                dest["receiver"] = re.match(receiver_regex,dest["params"]).group("receiver")
+                dest_string = "%12s - %30s:%s %15s  %s" % (dest["status"],dest["host"],dest["port"],dest["receiver"],dest["agentid"])
+            else:
+                dest_string = "%12s - %30s:%s  %s" % (dest["status"],dest["host"],dest["port"],dest["agentid"])
+        return dest_string
+
     def getDestinations(self):
         """
          Description: Get all of the destinations from the agent.properties file
                Input: Path to connector home (i.e. /opt/app/arcsight/syslog/current)
               Output: The hostname, port, and receiver (where applicable) for the destination as a dictionary
         """
-        _count = self.getAgentProperty("agents\[0\]\.destination\.count")
-        if _count == "<Unknown>":
-            return _count
-        _destinations = []
-        for i in xrange(int(_count)):
-            _type = self.getAgentProperty("agents\[0\]\.destination\["+str(i)+"\]\.type")
-            _params = self.getAgentProperty("agents\[0\]\.destination\["+str(i)+"\]\.params")
-            _host_regex = r".*\<Parameter Name\\=\"host\" Value\\=\"(?P<host>[0-9a-zA-Z\.-_]+)\".*"
-            _port_regex = r".*\<Parameter Name\\=\"port\" Value\\=\"(?P<port>[0-9]+)\".*"
-            _match_host = re.match(_host_regex,_params)
-            if _match_host:
-                _host = _match_host.group("host")
-                _match_port = re.match(_port_regex,_params)
-                if _match_port:
-                    _port = _match_port.group("port")
-                    if testConnection(_host,_port):
-                        _connect_test = "Reachable"
-                    else:
-                        _connect_test = "Unreachable"
-                else:
-                    _port = "<Unknown>"
-                    _connect_test = "<Unknown>"
+        count = self.getAgentProperty("agents\[0\]\.destination\.count")
+        if count == "<Unknown>":
+            return count
+        destinations = {}
+        for i in xrange(int(count)):
+            destination = {}
+            failover_count = self.getAgentProperty("agents\[0\]\.destination\[%s\]\.failover\.count" % (i))
+            failovers = []
+            for j in xrange(int(failover_count)):
+                failovers.append(self.getDestinationInfo(i,"failover",j))
+            
+            destination["failovers"] = failovers
+            destination["primary"] = self.getDestinationInfo(i)
+            destinations["Destination " + str(i)] = destination
+        
+        if destinations:
+            return destinations
+        else:
+            return "None"
 
-                if _type == "loggersecure":
-                    _receiver_regex = r".*\<Parameter Name\\=\"rcvrname\" Value\\=\"(?P<receiver>[0-9a-zA-Z\ \.-_]+)\"/\>\\n.*"
-                    _receiver = re.match(_receiver_regex,_params).group("receiver")
-                    _destination = "%12s - %30s:%s %s" % (_connect_test, _host, _port, _receiver)
-                else:
-                    _destination = "%12s - %30s:%s " % (_connect_test, _host, _port)
-                _destinations.append(_destination)
-            if _destinations:
-                return _destinations
-            else:
-                return "None"
 
     def getAgentProperty(self, key):
         """
@@ -863,6 +888,7 @@ def testConnection(target, port):
            Input: target - address/hostname to ping
           Output: True if connection is successful, False otherwise
     """
+    return False
     s = socket.socket()
     try:
         s.connect((target,int(port)))
@@ -912,7 +938,7 @@ def printData(data, indent=0):
             print("%s%s:" % ("    "*indent,key.upper()))
             printData(value,indent+1)
         elif isinstance(value,list):
-            if len(value) == 1:
+            if len(value) == 1 and isinstance(value[0],str):
                 print("%s%s: %s" % ("    "*indent,key.upper(),value[0]))
             else:
                 print("%s%s:" % ("    "*indent,key.upper()))
@@ -970,7 +996,7 @@ def main():
     printHeader("SERVER INFORMATION")
     osData = OS_Stats()
     osData.prettyPrint()
-    osData.pickleIt("OS_pickle.txt")
+#    osData.pickleIt("OS_pickle.txt")
 
     printHeader("ARCSIGHT INFORMATION")
     connectorList = getArcSightInfo()
@@ -978,7 +1004,7 @@ def main():
         for index,connector in enumerate(connectorList):
             print("Connector " + str(index+1) + ": ")
             connector.prettyPrint()
-        connectorList.pickleIt("AS_pickle.txt")
+#        connectorList.pickleIt("AS_pickle.txt")
     else:
         print("")
         print("No ArcSight connector services appear to be installed on this system.")
