@@ -19,6 +19,7 @@ History:
     0.5 (05/09/2013) - Added connector-type specific attributes
     0.6 (05/13/2013) - Added support for exporting data to pickled file
     0.7 (05/23/2013) - Included failovers in destinations for connectors
+    0.8 (05/27/2013) - Added ability to send file to another system
 
 Future:
     - Support for multiple output formats (XML,CSV,JSON,etc)
@@ -69,7 +70,7 @@ class Stats(object):
 
     def pickleIt(self, file_name):
         try:
-            f = open(file_name, 'wb')
+            f = open(file_name, 'ab')
             norm_dict = self.getDict()
             pickle.dump(norm_dict, f)
         except IOError:
@@ -397,7 +398,7 @@ def getArcSightInfo():
             connectors.append(Connector(path))
     return connectors
 
-class Connector(object):
+class Connector(Stats):
     def __init__(self,path):
         self._headers = _headers = ["type","version","enabled","process status","service","path","folder size","old versions","destinations","map files","categorization files","log info","agent.log errors","wrapper.log errors","type specifics"]
         self.path           = path
@@ -888,7 +889,7 @@ def testConnection(target, port):
            Input: target - address/hostname to ping
           Output: True if connection is successful, False otherwise
     """
-    return False
+#    return False
     s = socket.socket()
     try:
         s.connect((target,int(port)))
@@ -897,18 +898,36 @@ def testConnection(target, port):
     except Exception, e:
         s.close()
         return False
-#    timeout = socket.setdefaulttimeout(15)
-#    try:
-#        c = httplib.HTTPSConnection(target, port)
-#        c.request("GET", "/")
-#        response = c.getresponse()
-#        if "200" or "302" in str(response.status) and "OK" in response.reason:
-#            return True
-#        else:
-#            return False
-#    except:
-#        return False
-#    return False
+
+
+def sendFile(file, host, port):
+    for i in xrange(5):
+        try:
+            cs = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            cs.connect((host, 9091))
+        except:
+            sleep(5)
+            continue
+        else:
+            cs.send("SEND " + file)
+            cs.close()
+            
+            try:
+                ms = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                ms.connect((host,port))
+            except:
+                sleep(5)
+                continue
+            else:
+                f = open(file, "rb")
+                data = f.read()
+                f.close()
+
+                ms.send(data)
+                ms.close()
+    else:
+        print("Could not connect to %s:%s" % (host,port))
+
 
 def doNsLookup(target):
     """
@@ -992,11 +1011,25 @@ def main():
     if 'linux' not in sys.platform and 'sunos' not in sys.platform:
         print("ERROR: Attempting to run on an unsupported platform, exiting.")
         sys.exit(2)
+    
+    OSPickleFile = "OS_pickle.%s.txt" % socket.gethostname()
+    ASPickleFile = "AS_pickle.%s.txt" % socket.gethostname()
+    AllPickleFile = "pickle.%s.txt" % socket.gethostname()
+
+    try:
+        os.remove(OSPickleFile)
+    except OSError:
+        pass
+
+    try:
+        os.remove(OSPickleFile)
+    except OSError:
+        pass
 
     printHeader("SERVER INFORMATION")
     osData = OS_Stats()
     osData.prettyPrint()
-#    osData.pickleIt("OS_pickle.txt")
+    osData.pickleIt(OSPickleFile)
 
     printHeader("ARCSIGHT INFORMATION")
     connectorList = getArcSightInfo()
@@ -1004,11 +1037,14 @@ def main():
         for index,connector in enumerate(connectorList):
             print("Connector " + str(index+1) + ": ")
             connector.prettyPrint()
-#        connectorList.pickleIt("AS_pickle.txt")
+            connector.pickleIt(ASPickleFile)
+        runOSCommand("cat %s %s > %s" % (OSPickleFile,ASPickleFile,AllPickleFile))
     else:
+        runOSCommand("cp %s %s" % (OSPickleFile,AllPickleFile))
         print("")
         print("No ArcSight connector services appear to be installed on this system.")
         print("")
+    sendFile(AllPickleFile,'LOCALHOST',9090)
 
 if __name__ == '__main__':
     main()
