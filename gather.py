@@ -906,7 +906,7 @@ def sendFile(file, host, port):
             cs = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
             cs.connect((host, 9091))
         except:
-            sleep(5)
+            time.sleep(5)
             continue
         else:
             cs.send("SEND " + file)
@@ -916,7 +916,7 @@ def sendFile(file, host, port):
                 ms = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
                 ms.connect((host,port))
             except:
-                sleep(5)
+                time.sleep(5)
                 continue
             else:
                 f = open(file, "rb")
