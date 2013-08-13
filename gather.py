@@ -5,8 +5,8 @@ ArcSight connector level issues.
 
 __author__ = "Adam Reber"
 __email__ = "adam.reber@gmail.com"
-__version__ = "0.7"
-__date__ = "05/23/2013"
+__version__ = "0.8"
+__date__ = "08/13/2013"
 __status__ = "Development"
 
 
@@ -19,7 +19,7 @@ History:
     0.5 (05/09/2013) - Added connector-type specific attributes
     0.6 (05/13/2013) - Added support for exporting data to pickled file
     0.7 (05/23/2013) - Included failovers in destinations for connectors
-    0.8 (05/27/2013) - Added ability to send file to another system
+    0.8 (08/13/2013) - Improved support for Python 2.4
 
 Future:
     - Support for multiple output formats (XML,CSV,JSON,etc)
@@ -30,7 +30,6 @@ Future:
       - Oracle: DB connection info
     - Send data to another server for central collection
     - Config file to choose options
-    - Better support for Python 2.4 (RHEL 5 *sigh*)
     - Better support for Solaris... maybe.
 """
 
@@ -80,23 +79,23 @@ class Stats(object):
 
 class OS_Stats(Stats):
     def __init__(self):
-        self.headers = ["os version","python version","processor","memory","run level",
-                        "partitions","network","services","processes","selinux","ports"]
+        self.headers = ["os version", "python version", "processor", "memory", "run level", "partitions", "network",
+                        "services", "processes", "selinux", "ports"]
         self.version    = self.getOSVersion()
         self.py_version = self.getPythonVersion()
         self.cpu        = self.getCPUInfo()
         self.memory     = self.getMemoryInfo()
+        self.runlevel   = self.getRunLevel()
         self.partitions = self.getPartitionInfo()
         self.network    = self.getNetworkInfo()
-        self.runlevel   = self.getRunLevel()
         self.services   = self.getServices()
         self.processes  = self.getOSProcessStatus()
         self.selinux    = self.getSELinuxStatus()
         self.ports      = self.getUsedPorts()
 
     def getDict(self):
-        data = [self.version,self.py_version,self.cpu,self.memory,self.runlevel,self.partitions,
-                self.network,self.services,self.processes,self.selinux,self.ports]
+        data = [self.version, self.py_version, self.cpu, self.memory, self.runlevel, self.partitions, self.network,
+                self.services, self.processes, self.selinux, self.ports]
         return dict(zip(self.headers,data))
 
     def prettyPrint(self):
@@ -400,56 +399,64 @@ def getArcSightInfo():
 
 class Connector(Stats):
     def __init__(self,path):
-        self._headers = _headers = ["type","version","enabled","process status","service","path","folder size","old versions","destinations","map files","categorization files","log info","agent.log errors","wrapper.log errors","type specifics"]
+        self.headers = ["type", "version", "enabled", "process status", "service", "path", "folder size",
+                        "old versions", "destinations", "map files", "categorization files", "log info",
+                        "agent.log errors", "wrapper.log errors", "type specifics"]
         self.path           = path
-        self.folder_size    = self.getFolderSize()
-        self.service        = self.getServiceName()
-        self.version        = self.getConnectorVersion()
         self.type           = self.getConnectorType()
-        self.specifics      = ""
-#        self.specifics      = self.getTypeSpecifics()
-        self.destinations   = self.getDestinations()
+        self.version        = self.getConnectorVersion()
         self.enabled        = self.getAgentProperty("agents\[0\]\.enabled")
-        self.cat_files      = getFilesInFolder(os.path.join(self.path,"user/agent/acp/categorizer/current"),".csv")
-        self.map_files      = getFilesInFolder(os.path.join(self.path,"user/agent/map/"),".properties")
-        self.old_versions   = self.getOldVersions()
-        self.log_info       = self.getLogInfo()
         self.process_status = self.getProcessStatus()
+        self.service        = self.getServiceName()
+        self.folder_size    = self.getFolderSize()
+        self.old_versions   = self.getOldVersions()
+        self.destinations   = self.getDestinations()
+        self.map_files      = getFilesInFolder(os.path.join(self.path,"user/agent/map/"),".properties")
+        self.cat_files      = getFilesInFolder(os.path.join(self.path,"user/agent/acp/categorizer/current"),".csv")
+        self.log_info       = self.getLogInfo()
         self.agent_errors   = self.getLogErrors("agent",10)
         self.wrapper_errors = self.getLogErrors("wrapper",10)
-
+        self.specifics      = self.getTypeSpecifics()
 
     def getDict(self):
-        _data = [self.type,self.version,self.enabled,self.process_status,self.service,self.path,self.folder_size,self.old_versions,self.destinations,self.map_files,self.cat_files,self.log_info,self.agent_errors,self.wrapper_errors,self.specifics]
-        _zipped_data = dict(zip(self._headers,_data))
-        return _zipped_data
+        """
+         Description: Return a dict object containing all of the values for the class.  Values must be explicitly
+                      included in self.headers and 'data' below
+               Input: None
+              Output: Dict object representing the Connector instance
+        """
+        data = [self.type, self.version, self.enabled, self.process_status, self.service, self.path, self.folder_size,
+                 self.old_versions, self.destinations, self.map_files, self.cat_files, self.log_info, self.agent_errors,
+                 self.wrapper_errors, self.specifics]
+        zipped_data = dict(zip(self._headers,_data))
+        return zipped_data
 
     def prettyPrint(self):
+        """
+         Description: Recursively print out a dict/list-list-of-dicts structure in a human readable format, indenting
+                      for each dictionary level
+               Input: None
+              Output: Formatted dict printed to stdout
+        """
         data_dict = self.getDict()
-        for i in self._headers:
+        # print out values in the same order as they are listed in "self.headers"
+        for i in self.headers:
             printData({i : data_dict[i]},1)
         print("")
 
-    def getFolderSize(self):
-        path = os.path.normpath(os.path.join(self.path, ".."))
-        output = runOSCommand("du -h %s | grep %s$" % (path, path))
+    def getAgentProperty(self, key):
+        """
+         Description: Get a specific property value matching a key from the agent.properties file
+               Input: Path to connector home (i.e. /opt/app/arcsight/syslog/current), key to find in agent.properties
+              Output: The value coorsponding to the key
+        """
+        output = pyGrep(os.path.join(self.path,"user/agent/agent.properties"), key)
         if output:
-            return output.split()[0]
+            regex = r"" + key + "=(?P<value>.*)"
+            value = re.match(regex,output).group("value")
+            return value
         else:
             return "<Unknown>"
-
-    def getConnectorVersion(self):
-        """
-         Description: Read the connector version from the *common.xml file in the ArcSight Home directrory
-               Input: Path to connector home (i.e. /opt/app/arcsight/syslog/current)
-              Output: Connector version string (i.e. 5.1.0.1234)
-        """
-        _filename = glob.glob(os.path.join(self.path,"*-common.xml"))
-        if not _filename:
-            return "<Unknown>"
-        _regex = r".*agents-(?P<version>.*)-common.xml"
-        _version = re.match(_regex,_filename[0]).group("version")
-        return _version
 
     def getConnectorType(self):
         """
@@ -458,32 +465,76 @@ class Connector(Stats):
               Output: Connector type as a string (syslog, bsm, auditd, flexmulti_db, etc)
         """
         return self.getAgentProperty("agents\[0\]\.type")
-
-    def getTypeSpecifics(self):
+        
+    def getConnectorVersion(self):
+        """
+         Description: Read the connector version from the *common.xml file in the ArcSight Home directrory
+               Input: Path to connector home (i.e. /opt/app/arcsight/syslog/current)
+              Output: Connector version string (i.e. 5.1.0.1234)
+        """
+        filename = glob.glob(os.path.join(self.path,"*-common.xml"))
+        if not filename:
+            return "<Unknown>"
+        regex = r".*agents-(?P<version>.*)-common.xml"
+        version = re.match(_regex,filename[0]).group("version")
+        return version
+    
+    def getProcessStatus(self):
         """
          Description:
-               Input:
+               Input: Path to connector home (i.e. /opt/app/arcsight/syslog/current)
               Output:
         """
-        if self.type == 'windowsfg':
-            return self.getTypeSpecifics_Windows()
+        output = runOSCommand("`which ps` -ef | grep %s | grep -v grep" % (self.path))
+        if "ERROR" in output:
+            return output
+        if output:
+            return "Running"
+        else:
+            return "Not running"
+            
+    def getServiceName(self):
+        fileName = os.path.join(self.path,"user/agent/agent.wrapper.conf")
+        output = pyGrep(fileName, "wrapper.ntservice.name=arc_")
+        if output:
+            regex = r"wrapper.ntservice.name=(?P<name>arc_.*)"
+            name_match = re.match(regex,output)
+            if name_match:
+                name = name_match.group("name")
+                return name
+            else:
+                return "None"
         else:
             return "None"
-
-    def getTypeSpecifics_Windows(self):
-        hosts = {}
-        host_count = self.getAgentProperty("agents\[0\].windowshoststable.count")
-        try:
-            host_count = int(host_count)
-        except ValueError:
+    
+    def getFolderSize(self):
+        """
+         Description: Find the size of the connector installation folder (i.e. /opt/arcsight/connector1/) in MB
+               Input: None
+              Output: Folder size in MB
+        """
+        path = os.path.normpath(os.path.join(self.path, ".."))
+        output = runOSCommand("du -m %s | grep %s$" % (path, path))
+        if output:
+            return output.split()[0]
+        else:
             return "<Unknown>"
-        for i in xrange(host_count):
-            hostname = self.getAgentProperty("agents\[0\].windowshoststable\[%d\].hostname" % (i))
-            hosts[hostname] = {}
-            for property in ["windowsversion","application","security","system"]:
-                hosts[hostname][property] = self.getAgentProperty("agents\[0\].windowshoststable\[%d\].%s" % (i,property))
-        return hosts
 
+    def getOldVersions(self):
+        """
+         Description:
+               Input: Path to connector home (i.e. /opt/app/arcsight/syslog/current)
+              Output:
+        """
+        folders = []
+        for result in os.listdir(os.path.join(self.path, "..")):
+            if result != "current":
+                folders.append(result)
+        if folders:
+            return folders
+        else:
+            return "None"
+        
     def getDestinationInfo(self,num,type="",fail_num=0):
         host_regex = r".*\<Parameter Name\\=\"host\" Value\\=\"(?P<host>[0-9a-zA-Z\.-_]+)\".*"
         port_regex = r".*\<Parameter Name\\=\"port\" Value\\=\"(?P<port>[0-9]+)\".*"
@@ -495,6 +546,9 @@ class Connector(Stats):
             opt_string = ""
 
         dest = {}
+        #agents[0].destination[X].agentid OR agents[0].destination[X].failover[Y].agentid
+        #agents[0].destination[X].type    OR agents[0].destination[X].failover[Y].type
+        #agents[0].destination[X].params  OR agents[0].destination[X].failover[Y].params
         dest["agentid"] = self.getAgentProperty("agents\[0\]\.destination\[%s\]%s\.agentid" % (num,opt_string))
         dest["type"] = self.getAgentProperty("agents\[0\]\.destination\[%s\]%s\.type" % (num,opt_string))
         dest["params"] = self.getAgentProperty("agents\[0\]\.destination\[%s\]%s\.params" % (num,opt_string))
@@ -530,80 +584,19 @@ class Connector(Stats):
         if count == "<Unknown>":
             return count
         destinations = {}
-        for i in xrange(int(count)):
+        for connector_num in xrange(int(count)):
             destination = {}
-            failover_count = self.getAgentProperty("agents\[0\]\.destination\[%s\]\.failover\.count" % (i))
+            failover_count = self.getAgentProperty("agents\[0\]\.destination\[%s\]\.failover\.count" % (connector_num))
             failovers = []
-            for j in xrange(int(failover_count)):
-                failovers.append(self.getDestinationInfo(i,"failover",j))
-            
+            for failover_num in xrange(int(failover_count)):
+                failovers.append(self.getDestinationInfo(connector_num,"failover",failover_num))
+
             destination["failovers"] = failovers
-            destination["primary"] = self.getDestinationInfo(i)
-            destinations["Destination " + str(i)] = destination
-        
+            destination["primary"] = self.getDestinationInfo(connector_num)
+            destinations["Destination " + str(connector_num)] = destination
+
         if destinations:
             return destinations
-        else:
-            return "None"
-
-
-    def getAgentProperty(self, key):
-        """
-         Description: Get a specific property value matching a key from the agent.properties file
-               Input: Path to connector home (i.e. /opt/app/arcsight/syslog/current), key to find in agent.properties
-              Output: The value coorsponding to the key
-        """
-        output = pyGrep(os.path.join(self.path,"user/agent/agent.properties"), key)
-        if output:
-            regex = r"" + key + "=(?P<value>.*)"
-            value = re.match(regex,output).group("value")
-            return value
-        else:
-            return "<Unknown>"
-
-    def getServiceName(self):
-        fileName = os.path.join(self.path,"user/agent/agent.wrapper.conf")
-        output = pyGrep(fileName, "wrapper.ntservice.name=arc_")
-        if output:
-            regex = r"wrapper.ntservice.name=(?P<name>arc_.*)"
-            name_match = re.match(regex,output)
-            if name_match:
-                name = name_match.group("name")
-                return name
-            else:
-                return "None"
-        else:
-            return "None"
-
-
-    def getAgentConfig(self):
-        """
-         Description:
-               Input: Path to connector home (i.e. /opt/app/arcsight/syslog/current)
-              Output:
-        """
-        pass
-
-    def getParserInfo(self):
-        """
-         Description:
-               Input: Path to connector home (i.e. /opt/app/arcsight/syslog/current)
-              Output:
-        """
-        pass
-
-    def getOldVersions(self):
-        """
-         Description:
-               Input: Path to connector home (i.e. /opt/app/arcsight/syslog/current)
-              Output:
-        """
-        folders = []
-        for result in os.listdir(os.path.join(self.path, "..")):
-            if result != "current":
-                folders.append(result)
-        if folders:
-            return folders
         else:
             return "None"
 
@@ -620,20 +613,6 @@ class Connector(Stats):
             return "<Unknown>"
         pass
 
-    def getProcessStatus(self):
-        """
-         Description:
-               Input: Path to connector home (i.e. /opt/app/arcsight/syslog/current)
-              Output:
-        """
-        output = runOSCommand("`which ps` -ef | grep %s | grep -v grep" % (self.path))
-        if "ERROR" in output:
-            return output
-        if output:
-            return "Running"
-        else:
-            return "Not running"
-
     def getLogInfo(self):
         """
          Description:
@@ -647,34 +626,112 @@ class Connector(Stats):
         logs["full gc"] = self.getGCInfo()
         return logs
 
-    def getGCInfo(self):
-        gc = {}
-        gc["last gc"] = self.getLengthOfLastGC()
-#        gc["time between gcs"] = self.getTimeBetweenGCs()
-        return gc
+    def getLogTimeSpan(self):
+        """
+         Description:
+               Input: Path to connector home (i.e. /opt/app/arcsight/syslog/current)
+              Output:
+        """
+        agent_start_time   = self.getTime("agent","first")
+        wrapper_start_time = self.getTime("wrapper","first")
+        agent_end_time     = self.getTime("agent","last")
+        wrapper_end_time   = self.getTime("wrapper","last")
 
-    def getLengthOfLastGC(self):
-        file_name = os.path.join(self.path,"logs/agent.out.wrapper.log")
-        output = runOSCommand("`which grep` \"Full GC\" -A1 %s | `which grep` secs | tail -n 1" % (file_name))
-        regex = r'.* (?P<start>\d+K)->(?P<end>\d+K)\(\d+K\), (?P<time>\d+\.\d+) secs\]'
-        match = re.match(regex,output)
-        if match:
-            return match.groupdict()
+        if agent_end_time and agent_start_time:
+            agent_range = agent_end_time - agent_start_time
         else:
-            return "None"
+            agent_range = "<Unknown>"
 
-
-    def getMemoryStatus(self):
-        #[GC 275856K->206027K(290176K), 0.0230360 secs]
-        file_name = os.path.join(self.path,"logs/agent.out.wrapper.log")
-        output = runOSCommand("`which grep` \"\[GC \" %s | tail -n 1" % (file_name))
-        regex = r'.*\[GC \d+K->(?P<used>\d+K)\((?P<allocated>\d+K)\), \d+\.\d+ secs\]'
-        match = re.match(regex,output)
-        if match:
-            return match.groupdict()
+        if wrapper_end_time and wrapper_start_time:
+            wrapper_range = wrapper_end_time - wrapper_start_time
         else:
-            return "None"
+            wrapper_range = "<Unknown>"
 
+        headers = ["agent.log","wrapper.log"]
+        return dict(zip(headers,[agent_range,wrapper_range]))
+
+    def getTime(self,log_type,time_type):
+        """
+         Description:
+               Input: Path to connector home (i.e. /opt/app/arcsight/syslog/current),type = "agent" or "wrapper", number of lines to return
+              Output:
+        """
+        def first_time(log_path, log_type):
+            max_file = max_file_name(log_path)
+            match = None
+            try:
+                for line in open(max_file):
+                    match = re.match(regex[log_type],line)
+                    if match:
+                        match = match.groupdict()["date"]
+                        break
+            except IOError:
+                return None
+
+            return format_time(match,log_type)
+
+        def last_time(log_path,log_type,lines=5):
+            if lines > 50:
+                return None
+
+            output = runOSCommand("`which tail` -n %s %s" % (lines, log_path))
+
+            for line in output.split("\n"):
+                match = re.match(regex[log_type],line)
+                if match:
+                    match = match.groupdict()["date"]
+                    break
+                else:
+                    continue
+
+            if match:
+                return format_time(match,log_type)
+            else:
+                last_time(log_path,log_type,lines+5)
+
+        def format_time(time_str,type):
+            format = {'agent'   : "%Y-%m-%d %H:%M:%S",
+                  'wrapper' : "%Y/%m/%d %H:%M:%S" }
+                if not type in format.keys():
+                    return None
+    
+                if hasattr(datetime, 'strptime'):
+                    #python 2.6
+                    strptime = datetime.strptime
+                else:
+                    #python 2.4 equivalent
+                    strptime = lambda date_string, format: datetime(*(time.strptime(date_string, format)[0:6]))
+    
+                the_time = strptime(time_str, format[type])
+                return the_time
+
+        def max_file_name(log_path):
+            """
+             Description: Find the oldest log file based on the log rotation number
+                   Input: Path to connector home (i.e. /opt/app/arcsight/syslog/current), file name filter
+                  Output: Name of the oldest log file
+            """
+            nums = []
+            files = glob.glob(os.path.join(log_path,".*"))
+            nums = [ int(i.split(".")[-1]) for i in files ]
+            if nums:
+                return log_path + "." + str(max(nums))
+            else:
+                return log_path
+
+        regex = {'agent'   : r"\[(?P<date>\d\d\d\d-\d\d-\d\d\ \d\d:\d\d:\d\d)\,\d\d\d\].*",
+                 'wrapper' : r".*\|.*\| (?P<date>.*) \|.*" }
+
+        file_name = {'agent'   : "agent.log",
+                     'wrapper' : "agent.out.wrapper.log" }
+                     
+        log_path = os.path.join(self.path,"logs")
+        log_path = os.path.join(log_path,file_name[log_type])
+
+        functions = {'first' : first_time(log_path,log_type),
+                     'last'  : last_time(log_path,log_type) }
+
+        return functions[time_type]
 
     def getLogStatus(self):
         """
@@ -695,121 +752,34 @@ class Connector(Stats):
         else:
             return "None"
 
-    def getLogTimeSpan(self):
-        """
-         Description:
-               Input: Path to connector home (i.e. /opt/app/arcsight/syslog/current)
-              Output:
-        """
-        if sys.version_info < (2,5):
-            return "<Unknown> (Incompatible version of Python)"
-
-        agent_start_time   = self.getFirstTime("agent")
-        wrapper_start_time = self.getFirstTime("wrapper")
-        agent_end_time     = self.getLastTime("agent")
-        wrapper_end_time   = self.getLastTime("wrapper")
-        if agent_end_time and agent_start_time:
-            agent_range = agent_end_time - agent_start_time
-        else:
-            agent_range = "<Unknown>"
-
-        if wrapper_end_time and wrapper_start_time:
-            wrapper_range = wrapper_end_time - wrapper_start_time
-        else:
-            wrapper_range = "<Unknown>"
-
-        headers = ["agent.log","wrapper.log"]
-        return dict(zip(headers,[agent_range,wrapper_range]))
-
-    def getFirstTime(self, log_type):
-        """
-         Description:
-               Input: Path to connector home (i.e. /opt/app/arcsight/syslog/current), type = "agent" or "wrapper"
-              Output:
-        """
-        file_path = os.path.join(self.path,"logs")
-        if "agent" in log_type:
-            max_file = self.getMaxFileName(file_path,"agent.log.*")
-            regex = r"\[(?P<date>\d\d\d\d-\d\d-\d\d\ \d\d:\d\d:\d\d)\,\d\d\d\].*"
-
-        elif "wrapper" in log_type:
-            max_file = self.getMaxFileName(file_path,"agent.out.wrapper.log.*")
-            regex = r".*\|.*\| (?P<date>.*) \|.*"
-        log_path = os.path.join(file_path,max_file)
-        match = None
-        try:
-            for line in open(log_path):
-                match = re.match(regex,line)
-                if match:
-                    match = match.groupdict()["date"]
-                    break
-        except IOError:
-            return None
-
+    def getMemoryStatus(self):
+        #[GC 275856K->206027K(290176K), 0.0230360 secs]
+        file_name = os.path.join(self.path,"logs/agent.out.wrapper.log")
+        output = runOSCommand("`which grep` \"\[GC \" %s | tail -n 1" % (file_name))
+        regex = r'.*\[GC \d+K->(?P<used>\d+K)\((?P<allocated>\d+K)\), \d+\.\d+ secs\]'
+        match = re.match(regex,output)
         if match:
-            the_time = None
-            if "agent" in log_type:
-                the_time = datetime.strptime(match, "%Y-%m-%d %H:%M:%S")
-            elif "wrapper" in log_type:
-                the_time = datetime.strptime(match, "%Y/%m/%d %H:%M:%S")
-            return the_time
+            return match.groupdict()
         else:
-            return None
+            return "None"
 
-    def getLastTime(self,log_type,lines=5):
-        """
-         Description:
-               Input: Path to connector home (i.e. /opt/app/arcsight/syslog/current)
-                      type = "agent" or "wrapper", number of lines to return
-              Output:
-        """
-        if lines > 50:
-            return None
+    def getGCInfo(self):
+        gc = {}
+        gc["last gc"] = self.getLengthOfLastGC()
+#        gc["time between gcs"] = self.getTimeBetweenGCs()
+        return gc
 
-        log_path = os.path.join(self.path,"logs")
-        if log_type == "agent":
-            log_path = os.path.join(log_path,"agent.log")
-            regex = r"\[(?P<date>\d\d\d\d-\d\d-\d\d\ \d\d:\d\d:\d\d)\,\d\d\d\].*"
-
-        elif log_type == "wrapper":
-            log_path = os.path.join(log_path,"agent.out.wrapper.log")
-            regex = r".*\|.*\| (?P<date>.*) \|.*"
-        else:
-            return None
-
-        output = runOSCommand("`which tail` -n %s %s" % (lines, log_path))
-
-        for line in output.split("\n"):
-            match = re.match(regex,line)
-            if match:
-                match = match.groupdict()["date"]
-                break
-            else:
-                continue
-
+    def getLengthOfLastGC(self):
+        file_name = os.path.join(self.path,"logs/agent.out.wrapper.log")
+        output = runOSCommand("`which grep` \"Full GC\" -A1 %s | `which grep` secs | tail -n 1" % (file_name))
+        regex = r'.* (?P<start>\d+K)->(?P<end>\d+K)\(\d+K\), (?P<time>\d+\.\d+) secs\]'
+        match = re.match(regex,output)
         if match:
-            the_time = None
-            if "agent" in log_type:
-                the_time = datetime.strptime(match, "%Y-%m-%d %H:%M:%S")
-            elif "wrapper" in log_type:
-                the_time = datetime.strptime(match, "%Y/%m/%d %H:%M:%S")
-            return the_time
+            return match.groupdict()
         else:
-            self.getLastTime(self.path,lines+5)
+            return "None"
 
-    def getMaxFileName(self, log_path, file_filter):
-        """
-         Description: Find the oldest log file based on the log rotation number
-               Input: Path to connector home (i.e. /opt/app/arcsight/syslog/current), file name filter
-              Output: Name of the oldest log file
-        """
-        nums = []
-        files = glob.glob(os.path.join(self.path,file_filter))
-        nums = [ int(i.split(".")[-1]) for i in files ]
-        if nums:
-            return string.replace(filter,"*",str(max(nums)))
-        else:
-            return file_filter[:-2]
+    
 
     def getLogErrors(self, type, number):
         """
@@ -834,6 +804,36 @@ class Connector(Stats):
             return error_list
         else:
             return "None"
+            
+    def getTypeSpecifics(self):
+        """
+         Description: Return specific values based on what self.type is.
+               Input: None
+              Output: Dict object with varying structure
+        """
+        if self.type == 'windowsfg':
+            return self.getTypeSpecifics_Windows()
+        else:
+            return "None"
+
+    def getTypeSpecifics_Windows(self):
+        """
+         Description: Find parameters specific to Windows connectors.  Hostname
+               Input: 
+              Output: 
+        """
+        hosts = {}
+        host_count = self.getAgentProperty("agents\[0\].windowshoststable.count")
+        try:
+            host_count = int(host_count)
+        except ValueError:
+            return "<Unknown>"
+        for i in xrange(host_count):
+            hostname = self.getAgentProperty("agents\[0\].windowshoststable\[%d\].hostname" % (i))
+            hosts[hostname] = {}
+            for property in ["windowsversion","application","security","system"]:
+                hosts[hostname][property] = self.getAgentProperty("agents\[0\].windowshoststable\[%d\].%s" % (i,property))
+        return hosts
 
 ###########################################
 #    END ARCSIGHT INFORMATION FUNCTIONS   #
@@ -898,35 +898,6 @@ def testConnection(target, port):
     except Exception, e:
         s.close()
         return False
-
-
-def sendFile(file, host, port):
-    for i in xrange(5):
-        try:
-            cs = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            cs.connect((host, 9091))
-        except:
-            time.sleep(5)
-            continue
-        else:
-            cs.send("SEND " + file)
-            cs.close()
-            
-            try:
-                ms = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-                ms.connect((host,port))
-            except:
-                time.sleep(5)
-                continue
-            else:
-                f = open(file, "rb")
-                data = f.read()
-                f.close()
-
-                ms.send(data)
-                ms.close()
-    else:
-        print("Could not connect to %s:%s" % (host,port))
 
 
 def doNsLookup(target):
@@ -1011,25 +982,11 @@ def main():
     if 'linux' not in sys.platform and 'sunos' not in sys.platform:
         print("ERROR: Attempting to run on an unsupported platform, exiting.")
         sys.exit(2)
-    
-    OSPickleFile = "OS_pickle.%s.txt" % socket.gethostname()
-    ASPickleFile = "AS_pickle.%s.txt" % socket.gethostname()
-    AllPickleFile = "pickle.%s.txt" % socket.gethostname()
 
-    try:
-        os.remove(OSPickleFile)
-    except OSError:
-        pass
-
-    try:
-        os.remove(OSPickleFile)
-    except OSError:
-        pass
 
     printHeader("SERVER INFORMATION")
     osData = OS_Stats()
     osData.prettyPrint()
-    osData.pickleIt(OSPickleFile)
 
     printHeader("ARCSIGHT INFORMATION")
     connectorList = getArcSightInfo()
@@ -1037,14 +994,11 @@ def main():
         for index,connector in enumerate(connectorList):
             print("Connector " + str(index+1) + ": ")
             connector.prettyPrint()
-            connector.pickleIt(ASPickleFile)
-        runOSCommand("cat %s %s > %s" % (OSPickleFile,ASPickleFile,AllPickleFile))
     else:
-        runOSCommand("cp %s %s" % (OSPickleFile,AllPickleFile))
         print("")
         print("No ArcSight connector services appear to be installed on this system.")
         print("")
-    sendFile(AllPickleFile,'LOCALHOST',9090)
+
 
 if __name__ == '__main__':
     main()
