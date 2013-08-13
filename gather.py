@@ -935,7 +935,6 @@ def printData(data, indent=0):
                 print("%s%s:" % ("    "*indent,key.upper()))
                 for i in value:
                     if isinstance(i,dict):
-                        print("%s%s: " % ("    "*indent,key.upper()))
                         printData(i,indent+1)
                     else:
                         print("%s%s" % ("    "*(indent+1),str(i)))
