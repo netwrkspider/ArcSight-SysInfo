@@ -428,7 +428,7 @@ class Connector(Stats):
         data = [self.type, self.version, self.enabled, self.process_status, self.service, self.path, self.folder_size,
                  self.old_versions, self.destinations, self.map_files, self.cat_files, self.log_info, self.agent_errors,
                  self.wrapper_errors, self.specifics]
-        zipped_data = dict(zip(self._headers,_data))
+        zipped_data = dict(zip(self.headers,data))
         return zipped_data
 
     def prettyPrint(self):
@@ -476,7 +476,7 @@ class Connector(Stats):
         if not filename:
             return "<Unknown>"
         regex = r".*agents-(?P<version>.*)-common.xml"
-        version = re.match(_regex,filename[0]).group("version")
+        version = re.match(regex,filename[0]).group("version")
         return version
     
     def getProcessStatus(self):
@@ -569,10 +569,11 @@ class Connector(Stats):
 
             if dest["type"] == "loggersecure":
                 dest["receiver"] = re.match(receiver_regex,dest["params"]).group("receiver")
-                dest_string = "%12s - %30s:%s %15s  %s" % (dest["status"],dest["host"],dest["port"],dest["receiver"],dest["agentid"])
-            else:
-                dest_string = "%12s - %30s:%s  %s" % (dest["status"],dest["host"],dest["port"],dest["agentid"])
-        return dest_string
+        
+        #remove params key
+        dest.pop("params",None)
+        
+        return dest
 
     def getDestinations(self):
         """
@@ -692,18 +693,18 @@ class Connector(Stats):
         def format_time(time_str,type):
             format = {'agent'   : "%Y-%m-%d %H:%M:%S",
                   'wrapper' : "%Y/%m/%d %H:%M:%S" }
-                if not type in format.keys():
-                    return None
+            if not type in format.keys():
+                return None
     
-                if hasattr(datetime, 'strptime'):
-                    #python 2.6
-                    strptime = datetime.strptime
-                else:
-                    #python 2.4 equivalent
-                    strptime = lambda date_string, format: datetime(*(time.strptime(date_string, format)[0:6]))
+            if hasattr(datetime, 'strptime'):
+                #python 2.6
+                strptime = datetime.strptime
+            else:
+                #python 2.4 equivalent
+                strptime = lambda date_string, format: datetime(*(time.strptime(date_string, format)[0:6]))
     
-                the_time = strptime(time_str, format[type])
-                return the_time
+            the_time = strptime(time_str, format[type])
+            return the_time
 
         def max_file_name(log_path):
             """
