@@ -31,11 +31,15 @@ Future:
     - Send data to another server for central collection
     - Config file to choose options
     - Better support for Solaris... maybe.
+    - Server stats:
+        - Zombie processes
+        - System date / timezone
+    
 """
 
 import os,sys,string,httplib,subprocess,re,time,glob,socket,logging,pickle
-#import json
-from datetime import datetime
+import json
+from datetime import datetime,date
 
 ###########################################
 #     OPERATING SYSTEM INFO FUNCTIONS     #
@@ -223,12 +227,22 @@ class OS_Stats(Stats):
               Input: None
               Output: Output from 'df -h' showing all partitions and utilization
         """
-        output = runOSCommand("`which df` -h")
+        output = runOSCommand("`which df` -kT")
         if "ERROR" in output:
             return output
-        output = "\n" + output
+        output = output.split("\n")
+        regex = "^.*\s+(?P<type>\S+)\s+(?P<size>\S+)\s+(?P<used>\S+)\s+(?P<available>\S+)\s+(?P<used_percent>\S+)\s+(?P<mount>\S+)"
+        partitions = {}
+        partition_dict = {}
+        for i in output:
+            if "Filesystem" not in i:
+                 match = re.match(regex,i)
+                 if match:
+                     partition_dict = match.groupdict()
+                     mount = partition_dict.pop("mount", None)
+                     partitions[mount] = partition_dict
         if output:
-            return output
+            return partitions
         else:
             return "<Unknown>"
 
@@ -301,12 +315,12 @@ class OS_Stats(Stats):
         for i in services:
             output = runOSCommand("/etc/init.d/" + i + " status 2> /dev/null")
             if "stopped" in output:
-                results.append(i + ": STOPPED")
+                results.append({i : "STOPPED"})
             elif "running" in output:
                 regex = r".*\([^0-9]*([0-9]+)\) is running..."
                 matches = re.match(regex,output)
                 if matches:
-                    results.append(i + ": RUNNING (" + matches.group(1) + ")")
+                    results.append({i: "RUNNING (" + matches.group(1) + ")"})
         return results
 
     def getSELinuxStatus(self):
@@ -361,12 +375,14 @@ class OS_Stats(Stats):
             if "ERROR" in output:
                 return output
             output = output.split("\n")
-            port_list = ["  PORT  PROCESS"]
+            port_list = []
             for line in output:
                 if line:
+                    port_info = {}
                     line = line.split(" ")
-                    port_str = "%6s  %s" % (line[0],line[1])
-                    port_list.append(port_str)
+                    port_info["port"] = line[0]
+                    port_info["process"] = line[1]
+                    port_list.append(port_info)
             return port_list
 
         elif 'sunos' in sys.platform:
@@ -403,6 +419,7 @@ class Connector(Stats):
                         "old versions", "destinations", "map files", "categorization files", "log info",
                         "agent.log errors", "wrapper.log errors", "type specifics"]
         self.path           = path
+        self.hostname       = socket.gethostname()
         self.type           = self.getConnectorType()
         self.version        = self.getConnectorVersion()
         self.enabled        = self.getAgentProperty("agents\[0\]\.enabled")
@@ -425,9 +442,10 @@ class Connector(Stats):
                Input: None
               Output: Dict object representing the Connector instance
         """
-        data = [self.type, self.version, self.enabled, self.process_status, self.service, self.path, self.folder_size,
-                 self.old_versions, self.destinations, self.map_files, self.cat_files, self.log_info, self.agent_errors,
-                 self.wrapper_errors, self.specifics]
+        path = self.hostname + ":" + self.path 
+        data = [self.type, self.version, self.enabled, self.process_status, self.service, path, self.folder_size,
+                self.old_versions, self.destinations, self.map_files, self.cat_files, self.log_info, self.agent_errors,
+                self.wrapper_errors, self.specifics]
         zipped_data = dict(zip(self.headers,data))
         return zipped_data
 
@@ -550,6 +568,7 @@ class Connector(Stats):
         #agents[0].destination[X].type    OR agents[0].destination[X].failover[Y].type
         #agents[0].destination[X].params  OR agents[0].destination[X].failover[Y].params
         dest["agentid"] = self.getAgentProperty("agents\[0\]\.destination\[%s\]%s\.agentid" % (num,opt_string))
+        dest["agentid"] = dest["agentid"].replace("\\","")
         dest["type"] = self.getAgentProperty("agents\[0\]\.destination\[%s\]%s\.type" % (num,opt_string))
         dest["params"] = self.getAgentProperty("agents\[0\]\.destination\[%s\]%s\.params" % (num,opt_string))
         match_host = re.match(host_regex,dest["params"])
@@ -569,10 +588,15 @@ class Connector(Stats):
 
             if dest["type"] == "loggersecure":
                 dest["receiver"] = re.match(receiver_regex,dest["params"]).group("receiver")
-        
-        #remove params key
+
+        # Remove 'params' from dest dict
         dest.pop("params",None)
         
+        # grab properties from <agentid>.xml
+        dest["dns resolution"] = self.getDestinationProperty(dest["agentid"],"Network.HostNameResolutionEnabled")
+        dest["batch size"] = self.getDestinationProperty(dest["agentid"],"Batching.BatchSize")
+        dest["batch frequency"] = self.getDestinationProperty(dest["agentid"],"Batching.BatchFreq")
+
         return dest
 
     def getDestinations(self):
@@ -600,6 +624,20 @@ class Connector(Stats):
             return destinations
         else:
             return "None"
+
+    def getDestinationProperty(self,agentid,key):
+        file_name = os.path.join(self.path,"user/agent/%s.xml" % (agentid))
+        line = pyGrep(file_name, key)
+        if line:
+            regex = r".*%s\=\"(?P<value>\S+)\".*" % (key)
+            match = re.match(regex,line)
+            if match:
+                value = match.group("value")
+            else:
+                value = "<Unknown>"
+        else:
+            value = "<Unknown>"
+        return value
 
     def getServiceStatus(self,service):
         """
@@ -640,11 +678,13 @@ class Connector(Stats):
 
         if agent_end_time and agent_start_time:
             agent_range = agent_end_time - agent_start_time
+            agent_range = agent_range.days * 86400 + agent_range.seconds
         else:
             agent_range = "<Unknown>"
 
         if wrapper_end_time and wrapper_start_time:
             wrapper_range = wrapper_end_time - wrapper_start_time
+            wrapper_range = wrapper_range.days * 86400 + wrapper_range.seconds
         else:
             wrapper_range = "<Unknown>"
 
@@ -695,7 +735,7 @@ class Connector(Stats):
                   'wrapper' : "%Y/%m/%d %H:%M:%S" }
             if not type in format.keys():
                 return None
-    
+
             if hasattr(datetime, 'strptime'):
                 #python 2.6
                 strptime = datetime.strptime
@@ -854,6 +894,8 @@ def pyGrep(file, pattern):
         for line in lines:
             if regex.search(line):
                 return line.strip()
+        else:
+            return None
 
 
 def getFilesInFolder(file_path,filter="*"):
@@ -862,22 +904,23 @@ def getFilesInFolder(file_path,filter="*"):
            Input: Path to directory, file filter
           Output: A list of all file names in the given directory
     """
+    headers = ["size","creation time","md5","default"]
     default_md5s = ["1625152a3909d9c5fe1d7b91b9cd6048","cd8be946ff99c91480f8fad121c9ada6"]
-    files = []
+    files = {}
     for walk_result in os.walk(file_path):
-        for file in walk_result[-1]:
-            if filter in file:
-                current_file = os.path.join(walk_result[0],file)
+        for file_name in walk_result[-1]:
+            if filter in file_name:
+                current_file = os.path.join(walk_result[0],file_name)
                 current_file_stats = os.stat(current_file)
                 size = current_file_stats.st_size
                 ctime = time.asctime(time.localtime(current_file_stats.st_ctime))
                 md5 = md5_checksum(current_file)
                 if md5 in default_md5s:
-                    default = "(Default)"
+                    default = "True"
                 else:
-                    default = ""
-                file_info = "%20s  %7s bytes  %s  %s %s" % (file,size,ctime,md5,default)
-                files.append(file_info)
+                    default = "False"
+                file_data = [size,ctime,md5,default]
+                files[file_name] = (dict(zip(headers,file_data)))
     if files:
         return files
     else:
@@ -924,24 +967,38 @@ def printData(data, indent=0):
            Input: A dictionary of data, the starting indent (optional)
           Output: Formatted data printed to stdout
     """
+    spacing = "    "
     for key,value in data.iteritems():
         if isinstance(value,dict):
-            print("%s%s:" % ("    "*indent,key.upper()))
+            print("%s%s:" % (spacing*indent,key.upper()))
             printData(value,indent+1)
         elif isinstance(value,list):
             if len(value) == 1 and isinstance(value[0],str):
-                print("%s%s: %s" % ("    "*indent,key.upper(),value[0]))
+                print("%s%s: %s" % (spacing*indent,key.upper(),value[0]))
             else:
-                print("%s%s:" % ("    "*indent,key.upper()))
+                print("%s%s:" % (spacing*indent,key.upper()))
                 for i in value:
                     if isinstance(i,dict):
                         printData(i,indent+1)
                     else:
-                        print("%s%s" % ("    "*(indent+1),str(i)))
+                        print("%s%s" % (spacing*(indent+1),str(i)))
 
         else:
-            print("%s%s: %s" % ("    "*indent,key.upper(),value))
+            print("%s%s: %s" % (spacing*indent,key.upper(),value))
 
+def sendJSON(host, index, message):
+    """    the_date = time.strftime('%Y-%m-%d',time.localtime())
+    url = "/stats-%s/%s/" % (the_date,index)
+    conn = httplib.HTTPConnection(host,9200)
+    conn.request("POST",url,message)
+    response =  conn.getresponse()
+    if response.status in [200,201]:
+        print "Successfully sent data to %s" % (host)
+        print response.read()
+    else:
+        print "ERROR sending data: %s %s" % (response.status, response.reason)
+    """
+    print message
 def md5_checksum(file_name):
     """
      Description: Calculate the MD5 hash value of a given file using different methods
@@ -976,6 +1033,10 @@ def md5_checksum(file_name):
         return output.strip()
 
 def main():
+    PRINT = False
+    JSON = False
+    HOST = ""
+
     if os.geteuid() != 0:
         print("ERROR: Script must be run by root. Exiting.")
         sys.exit(1)
@@ -983,21 +1044,36 @@ def main():
         print("ERROR: Attempting to run on an unsupported platform, exiting.")
         sys.exit(2)
 
-
-    printHeader("SERVER INFORMATION")
+    for i in sys.argv:
+        if i == 'print':
+            PRINT = True
+        elif i == 'json':
+            JSON = True
+        elif i:
+            HOST = i
+    
     osData = OS_Stats()
-    osData.prettyPrint()
+    if PRINT:
+        printHeader("SERVER INFORMATION")
+        osData.prettyPrint()
+        printHeader("ARCSIGHT INFORMATION")
 
-    printHeader("ARCSIGHT INFORMATION")
+    if JSON:
+        sendJSON(HOST,"server",osData.getJSON())
+
     connectorList = getArcSightInfo()
     if connectorList:
         for index,connector in enumerate(connectorList):
-            print("Connector " + str(index+1) + ": ")
-            connector.prettyPrint()
+            if PRINT:
+                print("Connector " + str(index+1) + ": ")
+                connector.prettyPrint()
+            if JSON:
+                sendJSON(HOST,"connector",connector.getJSON())
     else:
-        print("")
-        print("No ArcSight connector services appear to be installed on this system.")
-        print("")
+        if PRINT:
+            print("")
+            print("No ArcSight connector services appear to be installed on this system.")
+            print("")
 
 
 if __name__ == '__main__':
