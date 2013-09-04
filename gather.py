@@ -5,8 +5,8 @@ ArcSight connector level issues.
 
 __author__ = "Adam Reber"
 __email__ = "adam.reber@gmail.com"
-__version__ = "0.8"
-__date__ = "08/13/2013"
+__version__ = "0.9"
+__date__ = "09/04/2013"
 __status__ = "Development"
 
 
@@ -17,12 +17,13 @@ History:
                        connectors under /, even if they are not installed as a service.
     0.4 (02/05/2013) - Modified to use class structure rather than dictionaries
     0.5 (05/09/2013) - Added connector-type specific attributes
-    0.6 (05/13/2013) - Added support for exporting data to pickled file
+    0.6 (05/13/2013) - Added support for exporting data to pickled file (later removed)
     0.7 (05/23/2013) - Included failovers in destinations for connectors
     0.8 (08/13/2013) - Improved support for Python 2.4
+    0.9 (09/04/2013) - Cleaned up, added output format options
 
 Future:
-    - Support for multiple output formats (XML,CSV,JSON,etc)
+    - Support for multiple output formats (XML,CEF,CSV,JSON,etc)
     - Output logging
     - Additional connector details based on type of connector
       - Syslog: Listening port
@@ -30,16 +31,14 @@ Future:
       - Oracle: DB connection info
     - Send data to another server for central collection
     - Config file to choose options
-    - Better support for Solaris... maybe.
     - Server stats:
-        - Zombie processes
+        - Zombie Processes
         - System date / timezone
-    
+
 """
 
-import os,sys,string,httplib,subprocess,re,time,glob,socket,logging,pickle
-import json
-from datetime import datetime,date
+import os,sys,httplib,subprocess,re,time,glob,socket
+from datetime import datetime
 
 ###########################################
 #     OPERATING SYSTEM INFO FUNCTIONS     #
@@ -67,24 +66,17 @@ class Stats(object):
         return {}
 
     def getJSON(self):
+        import json
         norm_dict = self.getDict()
         json_dict = json.dumps(norm_dict)
         return json_dict
 
-    def pickleIt(self, file_name):
-        try:
-            f = open(file_name, 'ab')
-            norm_dict = self.getDict()
-            pickle.dump(norm_dict, f)
-        except IOError:
-            print "Error writing to file %s" % (file_name)
-            return
-
 
 class OS_Stats(Stats):
     def __init__(self):
-        self.headers = ["os version", "python version", "processor", "memory", "run level", "partitions", "network",
+        self.headers = ["timestamp","os version", "python version", "processor", "memory", "run level", "partitions", "network",
                         "services", "processes", "selinux", "ports"]
+        self.timestamp  = time.asctime()
         self.version    = self.getOSVersion()
         self.py_version = self.getPythonVersion()
         self.cpu        = self.getCPUInfo()
@@ -98,7 +90,7 @@ class OS_Stats(Stats):
         self.ports      = self.getUsedPorts()
 
     def getDict(self):
-        data = [self.version, self.py_version, self.cpu, self.memory, self.runlevel, self.partitions, self.network,
+        data = [self.timestamp, self.version, self.py_version, self.cpu, self.memory, self.runlevel, self.partitions, self.network,
                 self.services, self.processes, self.selinux, self.ports]
         return dict(zip(self.headers,data))
 
@@ -149,16 +141,11 @@ class OS_Stats(Stats):
                Input: None
               Output: CPU model as a string
         """
-        if 'linux' in sys.platform:
-            output = runOSCommand("`which cat` /proc/cpuinfo | `which grep` \"model name\" | /usr/bin/head -1")
-            if "ERROR" in output:
-                return output
-            cpu_type = output.split(":")[1].strip()
-            return cpu_type
-        elif 'sunos' in sys.platform:
-            return "<Unknown>"
-        else:
-            return "<Unknown>"
+        output = runOSCommand("`which cat` /proc/cpuinfo | `which grep` \"model name\" | /usr/bin/head -1")
+        if "ERROR" in output:
+            return output
+        cpu_type = output.split(":")[1].strip()
+        return cpu_type
 
     def getLoadAverage(self):
         """
@@ -193,32 +180,20 @@ class OS_Stats(Stats):
 
     def getMemoryInfo(self):
         """
-         Description: Uses the 'memstat' and 'mdb' or 'free' OS tools to find the current memory usage.
+         Description: Uses the 'free' utility to find the current memory usage.
                Input: None
               Output: Returns a tuple of the memory used in MB and the percentage of user memory
         """
-        if 'sunos' in sys.platform:
-            output = runOSCommand("echo ::memstat|mdb -k|grep \"Free (freelist)\"")
-            if "ERROR" in output:
-                return output
-            output = output.split()
-            mem_used_value = "%s MB" % (output[-2])
-            mem_used_percent = output[-1]
-        elif 'linux' in sys.platform:
-            output = runOSCommand("`which free` -m")
-            if "ERROR" in output:
-                return output
-            memory_line = output.split("\n")[1].split()
-            total_mem = "%s MB" % (memory_line[1])
-            mem_used_value = "%s MB" % (memory_line[2])
-            mem_free_value = "%s MB" % (memory_line[3])
-            mem_used_percent = ("%.2f%s") % (((float(memory_line[2]) / float(memory_line[1])) * 100),"%")
-            headers = ["total","used","free","used %"]
-            values = [total_mem,mem_used_value,mem_free_value,mem_used_percent]
-            return dict(zip(headers,values))
-        else:
-            headers = ["total","used","free","used %"]
-            values = ["<Unknown>","<Unknown>","<Unknown>","<Unknown>"]
+        output = runOSCommand("`which free` -m")
+        if "ERROR" in output:
+            return output
+        memory_line = output.split("\n")[1].split()
+        total_mem = "%s MB" % (memory_line[1])
+        mem_used_value = "%s MB" % (memory_line[2])
+        mem_free_value = "%s MB" % (memory_line[3])
+        mem_used_percent = ("%.2f%s") % (((float(memory_line[2]) / float(memory_line[1])) * 100),"%")
+        headers = ["total","used","free","used %"]
+        values = [total_mem,mem_used_value,mem_free_value,mem_used_percent]
         return dict(zip(headers,values))
 
     def getPartitionInfo(self):
@@ -276,14 +251,10 @@ class OS_Stats(Stats):
         output = runOSCommand("`which ifconfig` -a | `which grep` inet | `which grep` -v inet6 | `which grep` -v 127.0.0.1")
         if "ERROR" in output:
             return output
-        if 'sunos' in sys.platform:
-            interface_addr = output.split()[1]
-        elif 'linux' in sys.platform:
-            interface_addr = []
-            for i in output.split("\n"):
-                if i:
-                    interface_addr.append(i.split(":")[1].split()[0])
-    #        interface_addr = output.split()[1].split(":")[1]
+        interface_addr = []
+        for i in output.split("\n"):
+            if i:
+                interface_addr.append(i.split(":")[1].split()[0])
         return interface_addr
 
     def getServices(self):
@@ -292,16 +263,9 @@ class OS_Stats(Stats):
                Input: None
               Output: The output from the 'svcs -a' command listing all of the services
         """
-        if 'sunos' in sys.platform:
-            output = "\n" + runOSCommand("svcs -a")
-            if "ERROR" in output:
-                return output
-        elif 'linux' in sys.platform:
-            output = runOSCommand("`which chkconfig` --list | `which egrep` \"arc_|syslog|auditd|network|iptables\"")
-            if "ERROR" in output:
-                return output
-        else:
-            return "<Unknown>"
+        output = runOSCommand("`which chkconfig` --list | `which egrep` \"arc_|syslog|auditd|network|iptables\"")
+        if "ERROR" in output:
+            return output
         return "\n" + output
 
     def getOSProcessStatus(self):
@@ -320,7 +284,7 @@ class OS_Stats(Stats):
                 regex = r".*\([^0-9]*([0-9]+)\) is running..."
                 matches = re.match(regex,output)
                 if matches:
-                    results.append({i: "RUNNING (" + matches.group(1) + ")"})
+                    results.append({i : "RUNNING (" + matches.group(1) + ")"})
         return results
 
     def getSELinuxStatus(self):
@@ -329,11 +293,8 @@ class OS_Stats(Stats):
                Input: None
               Output: "Permissive", "Enforcing", "Disabled", "N/A"
         """
-        if 'linux' in sys.platform:
-            output = runOSCommand("getenforce")
-            return output
-        else:
-            return "N/A"
+        output = runOSCommand("getenforce")
+        return output
 
     def getRunLevel(self):
         """
@@ -341,22 +302,14 @@ class OS_Stats(Stats):
                Input:
               Output:
         """
-        if 'sunos' in sys.platform:
-            output = runOSCommand("user -r")
-            if "ERROR" in output:
-                return output
-            output = output[18:21]
-            output = output.strip()
-        elif 'linux' in sys.platform:
-            output = runOSCommand("runlevel").strip()
-            if "ERROR" in output:
-                return output
-            elif "unknown" not in output:
-                output = output[-1:]
-            else:
-                return "<Unknown>"
+        output = runOSCommand("runlevel").strip()
+        if "ERROR" in output:
+            return output
+        elif "unknown" not in output:
+            output = output[-1:]
         else:
             return "<Unknown>"
+
         try:
             int(output)
             return output
@@ -365,31 +318,23 @@ class OS_Stats(Stats):
 
     def getUsedPorts(self):
         """
-         Description: Return a list of open ports and the corresponding process ID/name.  On solaris
-                      only ports 9001-9020 are checked.
+         Description: Return a list of open ports and the corresponding process ID/name.
                Input: None
               Output: List of ports and process id/name on same line.
         """
-        if 'linux' in sys.platform:
-            output = runOSCommand("netstat -nap | grep LISTEN | grep -v STREAM | awk '{ print $4 \" \" $7 }' | cut -d \":\" -f 2 | sort -u")
-            if "ERROR" in output:
-                return output
-            output = output.split("\n")
-            port_list = []
-            for line in output:
-                if line:
-                    port_info = {}
-                    line = line.split(" ")
-                    port_info["port"] = line[0]
-                    port_info["process"] = line[1]
-                    port_list.append(port_info)
-            return port_list
-
-        elif 'sunos' in sys.platform:
-            return "<Unknown>"
-        else:
-            return "<Unknown>"
-
+        output = runOSCommand("netstat -nap | grep LISTEN | grep -v STREAM | awk '{ print $4 \" \" $7 }' | cut -d \":\" -f 2 | sort -u")
+        if "ERROR" in output:
+            return output
+        output = output.split("\n")
+        port_list = []
+        for line in output:
+            if line:
+                port_info = {}
+                line = line.split(" ")
+                port_info["port"] = line[0]
+                port_info["process"] = line[1]
+                port_list.append(port_info)
+        return port_list
 
 ###########################################
 #   END OPERATING SYSTEM INFO FUNCTIONS   #
@@ -401,9 +346,9 @@ class OS_Stats(Stats):
 
 def getArcSightInfo():
     """
-     Description:
+     Description: Locate all connectors on the system and create new Connector objects
            Input: None
-          Output:
+          Output: A list of Connector objects representing all of teh connectors on the system
     """
     connectors = []
     directories = runOSCommand("find /opt -wholename *current/user/agent 2> /dev/null")
@@ -413,13 +358,14 @@ def getArcSightInfo():
             connectors.append(Connector(path))
     return connectors
 
+
 class Connector(Stats):
     def __init__(self,path):
-        self.headers = ["type", "version", "enabled", "process status", "service", "path", "folder size",
+        self.headers = ["timestamp", "type", "version", "enabled", "process status", "service", "path", "folder size",
                         "old versions", "destinations", "map files", "categorization files", "log info",
                         "agent.log errors", "wrapper.log errors", "type specifics"]
         self.path           = path
-        self.hostname       = socket.gethostname()
+        self.timestamp      = time.asctime()
         self.type           = self.getConnectorType()
         self.version        = self.getConnectorVersion()
         self.enabled        = self.getAgentProperty("agents\[0\]\.enabled")
@@ -442,10 +388,9 @@ class Connector(Stats):
                Input: None
               Output: Dict object representing the Connector instance
         """
-        path = self.hostname + ":" + self.path 
-        data = [self.type, self.version, self.enabled, self.process_status, self.service, path, self.folder_size,
-                self.old_versions, self.destinations, self.map_files, self.cat_files, self.log_info, self.agent_errors,
-                self.wrapper_errors, self.specifics]
+        data = [self.timestamp, self.type, self.version, self.enabled, self.process_status, self.service,
+                socket.gethostname()+":"+self.path, self.folder_size, self.old_versions, self.destinations,
+                self.map_files, self.cat_files, self.log_info, self.agent_errors,self.wrapper_errors, self.specifics]
         zipped_data = dict(zip(self.headers,data))
         return zipped_data
 
@@ -465,7 +410,7 @@ class Connector(Stats):
     def getAgentProperty(self, key):
         """
          Description: Get a specific property value matching a key from the agent.properties file
-               Input: Path to connector home (i.e. /opt/app/arcsight/syslog/current), key to find in agent.properties
+               Input: key to find in agent.properties
               Output: The value coorsponding to the key
         """
         output = pyGrep(os.path.join(self.path,"user/agent/agent.properties"), key)
@@ -479,7 +424,7 @@ class Connector(Stats):
     def getConnectorType(self):
         """
          Description: Grab the connector type from agent.properties
-               Input: Path to connector home (i.e. /opt/app/arcsight/syslog/current)
+               Input: None
               Output: Connector type as a string (syslog, bsm, auditd, flexmulti_db, etc)
         """
         return self.getAgentProperty("agents\[0\]\.type")
@@ -487,7 +432,7 @@ class Connector(Stats):
     def getConnectorVersion(self):
         """
          Description: Read the connector version from the *common.xml file in the ArcSight Home directrory
-               Input: Path to connector home (i.e. /opt/app/arcsight/syslog/current)
+               Input: None
               Output: Connector version string (i.e. 5.1.0.1234)
         """
         filename = glob.glob(os.path.join(self.path,"*-common.xml"))
@@ -499,9 +444,9 @@ class Connector(Stats):
     
     def getProcessStatus(self):
         """
-         Description:
-               Input: Path to connector home (i.e. /opt/app/arcsight/syslog/current)
-              Output:
+         Description: Return the process status of the connector
+               Input: None
+              Output: "Running" or "Not running"
         """
         output = runOSCommand("`which ps` -ef | grep %s | grep -v grep" % (self.path))
         if "ERROR" in output:
@@ -512,6 +457,11 @@ class Connector(Stats):
             return "Not running"
             
     def getServiceName(self):
+        """
+         Description: Find the name of the service that controls the connector
+               Input: None
+              Output: name of the service script in /etc/init.d/
+        """
         fileName = os.path.join(self.path,"user/agent/agent.wrapper.conf")
         output = pyGrep(fileName, "wrapper.ntservice.name=arc_")
         if output:
@@ -540,9 +490,9 @@ class Connector(Stats):
 
     def getOldVersions(self):
         """
-         Description:
-               Input: Path to connector home (i.e. /opt/app/arcsight/syslog/current)
-              Output:
+         Description: Find all of the old versions of the connector caused by upgrades
+               Input: None
+              Output: List of folders found in <connector root> not including "current"
         """
         folders = []
         for result in os.listdir(os.path.join(self.path, "..")):
@@ -554,6 +504,11 @@ class Connector(Stats):
             return "None"
         
     def getDestinationInfo(self,num,type="",fail_num=0):
+        """
+         Description: Gather information about a destination based on information in agent.properties (recursive)
+               Input: Destination number, Destination Type, Failover number
+              Output: Dict containing destination info: agentid, type, host, port, status, receiver
+        """
         host_regex = r".*\<Parameter Name\\=\"host\" Value\\=\"(?P<host>[0-9a-zA-Z\.-_]+)\".*"
         port_regex = r".*\<Parameter Name\\=\"port\" Value\\=\"(?P<port>[0-9]+)\".*"
         receiver_regex = r".*\<Parameter Name\\=\"rcvrname\" Value\\=\"(?P<receiver>[0-9a-zA-Z\ \.-_]+)\"/\>\\n.*"
@@ -588,15 +543,14 @@ class Connector(Stats):
 
             if dest["type"] == "loggersecure":
                 dest["receiver"] = re.match(receiver_regex,dest["params"]).group("receiver")
-
+        
         # Remove 'params' from dest dict
         dest.pop("params",None)
-        
+
         # grab properties from <agentid>.xml
         dest["dns resolution"] = self.getDestinationProperty(dest["agentid"],"Network.HostNameResolutionEnabled")
         dest["batch size"] = self.getDestinationProperty(dest["agentid"],"Batching.BatchSize")
         dest["batch frequency"] = self.getDestinationProperty(dest["agentid"],"Batching.BatchFreq")
-
         return dest
 
     def getDestinations(self):
@@ -639,24 +593,12 @@ class Connector(Stats):
             value = "<Unknown>"
         return value
 
-    def getServiceStatus(self,service):
-        """
-         Description:
-               Input:
-              Output:
-        """
-        output = runOSCommand("/etc/init.d/" + service + " status")
-        if output:
-            return output
-        else:
-            return "<Unknown>"
-        pass
 
     def getLogInfo(self):
         """
-         Description:
-               Input: Path to connector home (i.e. /opt/app/arcsight/syslog/current)
-              Output:
+         Description: Gather information from the connector logs
+               Input: None
+              Output: Dict containing log time frames, status lines, memory info, and garbage collection info
         """
         logs = {}
         logs["time frames"] = self.getLogTimeSpan()
@@ -667,9 +609,10 @@ class Connector(Stats):
 
     def getLogTimeSpan(self):
         """
-         Description:
-               Input: Path to connector home (i.e. /opt/app/arcsight/syslog/current)
-              Output:
+         Description: Calculate the time difference between the most recent log event and the earliest event still
+                      in the main sets of agent log files (agent.log* and agent.out.wrapper.log*)
+               Input: None
+              Output: Time difference in seconds between oldest and newest log event
         """
         agent_start_time   = self.getTime("agent","first")
         wrapper_start_time = self.getTime("wrapper","first")
@@ -678,13 +621,13 @@ class Connector(Stats):
 
         if agent_end_time and agent_start_time:
             agent_range = agent_end_time - agent_start_time
-            agent_range = agent_range.days * 86400 + agent_range.seconds
+            agent_range = agent_range.seconds + agent_range.days*86400
         else:
             agent_range = "<Unknown>"
 
         if wrapper_end_time and wrapper_start_time:
             wrapper_range = wrapper_end_time - wrapper_start_time
-            wrapper_range = wrapper_range.days * 86400 + wrapper_range.seconds
+            wrapper_range = wrapper_range.seconds + wrapper_range.days*86400
         else:
             wrapper_range = "<Unknown>"
 
@@ -693,9 +636,9 @@ class Connector(Stats):
 
     def getTime(self,log_type,time_type):
         """
-         Description:
-               Input: Path to connector home (i.e. /opt/app/arcsight/syslog/current),type = "agent" or "wrapper", number of lines to return
-              Output:
+         Description: 
+               Input: log_type = "agent" or "wrapper", time_type = "first" or "last"
+              Output: 
         """
         def first_time(log_path, log_type):
             max_file = max_file_name(log_path)
@@ -735,7 +678,7 @@ class Connector(Stats):
                   'wrapper' : "%Y/%m/%d %H:%M:%S" }
             if not type in format.keys():
                 return None
-
+    
             if hasattr(datetime, 'strptime'):
                 #python 2.6
                 strptime = datetime.strptime
@@ -794,6 +737,11 @@ class Connector(Stats):
             return "None"
 
     def getMemoryStatus(self):
+        """
+         Description: Get latest memory information from connector logs
+               Input: None
+              Output: Dict containing the "used" memory and the "allocated" memory, in KB
+        """
         #[GC 275856K->206027K(290176K), 0.0230360 secs]
         file_name = os.path.join(self.path,"logs/agent.out.wrapper.log")
         output = runOSCommand("`which grep` \"\[GC \" %s | tail -n 1" % (file_name))
@@ -805,12 +753,22 @@ class Connector(Stats):
             return "None"
 
     def getGCInfo(self):
+        """
+         Description: Find the latest Garbage Collection status
+               Input: None
+              Output: Dict containing GC info
+        """
         gc = {}
         gc["last gc"] = self.getLengthOfLastGC()
 #        gc["time between gcs"] = self.getTimeBetweenGCs()
         return gc
 
     def getLengthOfLastGC(self):
+        """
+         Description: Pull memory usage data from the latest Full GC event in the logs
+               Input: None
+              Output: Dict containing the "start" memory usage, "end" memory usage, and "time" taken
+        """
         file_name = os.path.join(self.path,"logs/agent.out.wrapper.log")
         output = runOSCommand("`which grep` \"Full GC\" -A1 %s | `which grep` secs | tail -n 1" % (file_name))
         regex = r'.* (?P<start>\d+K)->(?P<end>\d+K)\(\d+K\), (?P<time>\d+\.\d+) secs\]'
@@ -984,7 +942,8 @@ def printData(data, indent=0):
                         print("%s%s" % (spacing*(indent+1),str(i)))
 
         else:
-            print("%s%s: %s" % (spacing*indent,key.upper(),value))
+            print("%s%s: %s" % ("    "*indent,key.upper(),value))
+
 
 def sendJSON(host, index, message):
     """    the_date = time.strftime('%Y-%m-%d',time.localtime())
@@ -999,6 +958,8 @@ def sendJSON(host, index, message):
         print "ERROR sending data: %s %s" % (response.status, response.reason)
     """
     print message
+
+
 def md5_checksum(file_name):
     """
      Description: Calculate the MD5 hash value of a given file using different methods
@@ -1024,31 +985,50 @@ def md5_checksum(file_name):
             return use_md5_hash.hexdigest().strip()
 
     else:
-        if 'linux' in sys.platform:
-            output = runOSCommand("`which md5sum` " + file_name + " | cut -d \" \" -f 1")
-        elif 'sunos' in sys.platform:
-            output = runOSCommand("digest -a md5 " + file_name)
-        else:
-            return "<Unknown>"
+        output = runOSCommand("`which md5sum` " + file_name + " | cut -d \" \" -f 1")
         return output.strip()
+
+
+def printHelp():
+    print("Usage: python gather.py [print] [json] [cef] [syslog] [<hostname>] [<port>]")
+    print("")
+    print("Script must be run as the root user.")
+    print("Usage Examples:")
+    print("  - Print information in human-readable format:")
+    print("      python gather.py print")
+    print("  - Sending JSON to another host via syslog:")
+    print("      python gather.py json syslog myserver.local 5514")
+    print("  - Send JSON data to another host and also print human readable data:")
+    print("      python gather.py json print syslog myserver.local 5514")
+
 
 def main():
     PRINT = False
     JSON = False
+    SYSLOG = False
+    CEF = False
     HOST = ""
 
     if os.geteuid() != 0:
         print("ERROR: Script must be run by root. Exiting.")
         sys.exit(1)
-    if 'linux' not in sys.platform and 'sunos' not in sys.platform:
+    if 'linux' not in sys.platform:
         print("ERROR: Attempting to run on an unsupported platform, exiting.")
         sys.exit(2)
 
     for i in sys.argv:
-        if i == 'print':
+        if i == 'help' or i == 'h' or i == '-h':
+            printHelp()
+            sys.exit(0)
+        elif i == 'print':
             PRINT = True
         elif i == 'json':
             JSON = True
+        elif i == 'cef':
+            CEF = True
+        elif i.isalnum():
+            SYSLOG = True
+            PORT = int(i)
         elif i:
             HOST = i
     
@@ -1074,7 +1054,6 @@ def main():
             print("")
             print("No ArcSight connector services appear to be installed on this system.")
             print("")
-
 
 if __name__ == '__main__':
     main()
