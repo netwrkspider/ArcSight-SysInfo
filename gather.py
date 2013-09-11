@@ -55,7 +55,7 @@ def runOSCommand(command):
     process.stdout.close()
     process.wait()
     if error:
-        return "<Unknown (ERROR)> "
+        return None
     return output
 
 class Stats(object):
@@ -142,10 +142,11 @@ class OS_Stats(Stats):
               Output: CPU model as a string
         """
         output = runOSCommand("`which cat` /proc/cpuinfo | `which grep` \"model name\" | /usr/bin/head -1")
-        if "ERROR" in output:
-            return output
-        cpu_type = output.split(":")[1].strip()
-        return cpu_type
+        if output:
+            cpu_type = output.split(":")[1].strip()
+            return cpu_type
+        else:
+            return None
 
     def getLoadAverage(self):
         """
@@ -185,16 +186,17 @@ class OS_Stats(Stats):
               Output: Returns a tuple of the memory used in MB and the percentage of user memory
         """
         output = runOSCommand("`which free` -m")
-        if "ERROR" in output:
-            return output
-        memory_line = output.split("\n")[1].split()
-        total_mem = "%s MB" % (memory_line[1])
-        mem_used_value = "%s MB" % (memory_line[2])
-        mem_free_value = "%s MB" % (memory_line[3])
-        mem_used_percent = ("%.2f%s") % (((float(memory_line[2]) / float(memory_line[1])) * 100),"%")
-        headers = ["total","used","free","used %"]
-        values = [total_mem,mem_used_value,mem_free_value,mem_used_percent]
-        return dict(zip(headers,values))
+        if output:
+            memory_line = output.split("\n")[1].split()
+            total_mem = "%s MB" % (memory_line[1])
+            mem_used_value = "%s MB" % (memory_line[2])
+            mem_free_value = "%s MB" % (memory_line[3])
+            mem_used_percent = ("%.2f%s") % (((float(memory_line[2]) / float(memory_line[1])) * 100),"%")
+            headers = ["total","used","free","used %"]
+            values = [total_mem,mem_used_value,mem_free_value,mem_used_percent]
+            return dict(zip(headers,values))
+        else:
+            return None
 
     def getPartitionInfo(self):
         """
@@ -203,23 +205,21 @@ class OS_Stats(Stats):
               Output: Output from 'df -h' showing all partitions and utilization
         """
         output = runOSCommand("`which df` -kT")
-        if "ERROR" in output:
-            return output
-        output = output.split("\n")
-        regex = "^.*\s+(?P<type>\S+)\s+(?P<size>\S+)\s+(?P<used>\S+)\s+(?P<available>\S+)\s+(?P<used_percent>\S+)\s+(?P<mount>\S+)"
-        partitions = {}
-        partition_dict = {}
-        for i in output:
-            if "Filesystem" not in i:
-                 match = re.match(regex,i)
-                 if match:
-                     partition_dict = match.groupdict()
-                     mount = partition_dict.pop("mount", None)
-                     partitions[mount] = partition_dict
         if output:
+            output = output.split("\n")
+            regex = "^.*\s+(?P<type>\S+)\s+(?P<size>\S+)\s+(?P<used>\S+)\s+(?P<available>\S+)\s+(?P<used_percent>\S+)\s+(?P<mount>\S+)"
+            partitions = {}
+            partition_dict = {}
+            for i in output:
+                if "Filesystem" not in i:
+                     match = re.match(regex,i)
+                     if match:
+                         partition_dict = match.groupdict()
+                         mount = partition_dict.pop("mount", None)
+                         partitions[mount] = partition_dict
             return partitions
         else:
-            return "<Unknown>"
+            return None
 
     def getNetworkInfo(self):
         """
@@ -249,13 +249,14 @@ class OS_Stats(Stats):
               Output: IP Addresses for all active network interfaces
         """
         output = runOSCommand("`which ifconfig` -a | `which grep` inet | `which grep` -v inet6 | `which grep` -v 127.0.0.1")
-        if "ERROR" in output:
-            return output
-        interface_addr = []
-        for i in output.split("\n"):
-            if i:
-                interface_addr.append(i.split(":")[1].split()[0])
-        return interface_addr
+        if output:
+            interface_addr = []
+            for i in output.split("\n"):
+                if i:
+                    interface_addr.append(i.split(":")[1].split()[0])
+            return interface_addr
+        else:
+            return None
 
     def getServices(self):
         """
@@ -264,9 +265,10 @@ class OS_Stats(Stats):
               Output: The output from the 'svcs -a' command listing all of the services
         """
         output = runOSCommand("`which chkconfig` --list | `which egrep` \"arc_|syslog|auditd|network|iptables\"")
-        if "ERROR" in output:
-            return output
-        return "\n" + output
+        if output:
+            return "\n" + output
+        else:
+            return None
 
     def getOSProcessStatus(self):
         """
@@ -303,18 +305,19 @@ class OS_Stats(Stats):
               Output:
         """
         output = runOSCommand("runlevel").strip()
-        if "ERROR" in output:
-            return output
-        elif "unknown" not in output:
-            output = output[-1:]
-        else:
-            return "<Unknown>"
+        if output:
+            if "unknown" not in output:
+                output = output[-1:]
+            else:
+                return None
 
-        try:
-            int(output)
-            return output
-        except ValueError:
-            return "<Unknown>"
+            try:
+                int(output)
+                return output
+            except ValueError:
+                return None
+        else:
+            return None
 
     def getUsedPorts(self):
         """
@@ -323,18 +326,19 @@ class OS_Stats(Stats):
               Output: List of ports and process id/name on same line.
         """
         output = runOSCommand("netstat -nap | grep LISTEN | grep -v STREAM | awk '{ print $4 \" \" $7 }' | cut -d \":\" -f 2 | sort -u")
-        if "ERROR" in output:
-            return output
-        output = output.split("\n")
-        port_list = []
-        for line in output:
-            if line:
-                port_info = {}
-                line = line.split(" ")
-                port_info["port"] = line[0]
-                port_info["process"] = line[1]
-                port_list.append(port_info)
-        return port_list
+        if output:
+            output = output.split("\n")
+            port_list = []
+            for line in output:
+                if line:
+                    port_info = {}
+                    line = line.split(" ")
+                    port_info["port"] = line[0]
+                    port_info["process"] = line[1]
+                    port_list.append(port_info)
+            return port_list
+        else:
+            return None
 
 ###########################################
 #   END OPERATING SYSTEM INFO FUNCTIONS   #
@@ -361,11 +365,12 @@ def getArcSightInfo():
 
 class Connector(Stats):
     def __init__(self,path):
-        self.headers = ["timestamp", "type", "version", "enabled", "process status", "service", "path", "folder size",
+        self.headers = ["timestamp", "hostname", "type", "version", "enabled", "process status", "service", "path", "folder size",
                         "old versions", "destinations", "map files", "categorization files", "log info",
                         "agent.log errors", "wrapper.log errors", "type specifics"]
         self.path           = path
         self.timestamp      = time.asctime()
+        self.hostname       = socket.gethostname()
         self.type           = self.getConnectorType()
         self.version        = self.getConnectorVersion()
         self.enabled        = self.getAgentProperty("agents\[0\]\.enabled")
@@ -388,8 +393,8 @@ class Connector(Stats):
                Input: None
               Output: Dict object representing the Connector instance
         """
-        data = [self.timestamp, self.type, self.version, self.enabled, self.process_status, self.service,
-                socket.gethostname()+":"+self.path, self.folder_size, self.old_versions, self.destinations,
+        data = [self.timestamp, self.hostname, self.type, self.version, self.enabled, self.process_status, self.service,
+                self.hostname+":"+self.path, self.folder_size, self.old_versions, self.destinations,
                 self.map_files, self.cat_files, self.log_info, self.agent_errors,self.wrapper_errors, self.specifics]
         zipped_data = dict(zip(self.headers,data))
         return zipped_data
@@ -419,7 +424,7 @@ class Connector(Stats):
             value = re.match(regex,output).group("value")
             return value
         else:
-            return "<Unknown>"
+            return None
 
     def getConnectorType(self):
         """
@@ -437,7 +442,7 @@ class Connector(Stats):
         """
         filename = glob.glob(os.path.join(self.path,"*-common.xml"))
         if not filename:
-            return "<Unknown>"
+            return None
         regex = r".*agents-(?P<version>.*)-common.xml"
         version = re.match(regex,filename[0]).group("version")
         return version
@@ -449,8 +454,6 @@ class Connector(Stats):
               Output: "Running" or "Not running"
         """
         output = runOSCommand("`which ps` -ef | grep %s | grep -v grep" % (self.path))
-        if "ERROR" in output:
-            return output
         if output:
             return "Running"
         else:
@@ -471,9 +474,9 @@ class Connector(Stats):
                 name = name_match.group("name")
                 return name
             else:
-                return "None"
+                return None
         else:
-            return "None"
+            return None
     
     def getFolderSize(self):
         """
@@ -486,7 +489,7 @@ class Connector(Stats):
         if output:
             return output.split()[0]
         else:
-            return "<Unknown>"
+            return None
 
     def getOldVersions(self):
         """
@@ -501,7 +504,7 @@ class Connector(Stats):
         if folders:
             return folders
         else:
-            return "None"
+            return None
         
     def getDestinationInfo(self,num,type="",fail_num=0):
         """
@@ -538,8 +541,8 @@ class Connector(Stats):
                 else:
                     dest["status"] = "Unreachable"
             else:
-                dest["port"] = "<Unknown>"
-                dest["status"] = "<Unknown>"
+                dest["port"] = None
+                dest["status"] = None
 
             if dest["type"] == "loggersecure":
                 dest["receiver"] = re.match(receiver_regex,dest["params"]).group("receiver")
@@ -560,7 +563,7 @@ class Connector(Stats):
               Output: The hostname, port, and receiver (where applicable) for the destination as a dictionary
         """
         count = self.getAgentProperty("agents\[0\]\.destination\.count")
-        if count == "<Unknown>":
+        if not count:
             return count
         destinations = {}
         for connector_num in xrange(int(count)):
@@ -577,7 +580,7 @@ class Connector(Stats):
         if destinations:
             return destinations
         else:
-            return "None"
+            return None
 
     def getDestinationProperty(self,agentid,key):
         file_name = os.path.join(self.path,"user/agent/%s.xml" % (agentid))
@@ -588,9 +591,9 @@ class Connector(Stats):
             if match:
                 value = match.group("value")
             else:
-                value = "<Unknown>"
+                value = None
         else:
-            value = "<Unknown>"
+            value = None
         return value
 
 
@@ -623,13 +626,13 @@ class Connector(Stats):
             agent_range = agent_end_time - agent_start_time
             agent_range = agent_range.seconds + agent_range.days*86400
         else:
-            agent_range = "<Unknown>"
+            agent_range = None
 
         if wrapper_end_time and wrapper_start_time:
             wrapper_range = wrapper_end_time - wrapper_start_time
             wrapper_range = wrapper_range.seconds + wrapper_range.days*86400
         else:
-            wrapper_range = "<Unknown>"
+            wrapper_range = None
 
         headers = ["agent.log","wrapper.log"]
         return dict(zip(headers,[agent_range,wrapper_range]))
@@ -659,19 +662,21 @@ class Connector(Stats):
                 return None
 
             output = runOSCommand("`which tail` -n %s %s" % (lines, log_path))
+            if output:
+                for line in output.split("\n"):
+                    match = re.match(regex[log_type],line)
+                    if match:
+                        match = match.groupdict()["date"]
+                        break
+                    else:
+                        continue
 
-            for line in output.split("\n"):
-                match = re.match(regex[log_type],line)
                 if match:
-                    match = match.groupdict()["date"]
-                    break
+                    return format_time(match,log_type)
                 else:
-                    continue
-
-            if match:
-                return format_time(match,log_type)
+                    last_time(log_path,log_type,lines+5)
             else:
-                last_time(log_path,log_type,lines+5)
+                return None
 
         def format_time(time_str,type):
             format = {'agent'   : "%Y-%m-%d %H:%M:%S",
@@ -724,17 +729,15 @@ class Connector(Stats):
               Output:
         """
         output = runOSCommand("`which grep` \"\[INFO \]\" %s | grep \"ET=\" | tail -n 1" % (os.path.join(self.path,"logs/agent.out.wrapper.log")))
-        if "ERROR" in output:
-            return output
         if output:
             regex = r".*\{C=(?P<cache>[0-9]+), ET=(?P<ET>Up|Down), HT=(?P<HT>Up|Down), N=(?P<name>[0-9A-Za-z\-\_ ]+), S=(?P<Events>[0-9]+), T=(?P<eps>[0-9\.]+)\}"
             match = re.match(regex,output)
             if match:
                 return match.groupdict()
             else:
-                return "None"
+                return None
         else:
-            return "None"
+            return None
 
     def getMemoryStatus(self):
         """
@@ -745,12 +748,15 @@ class Connector(Stats):
         #[GC 275856K->206027K(290176K), 0.0230360 secs]
         file_name = os.path.join(self.path,"logs/agent.out.wrapper.log")
         output = runOSCommand("`which grep` \"\[GC \" %s | tail -n 1" % (file_name))
-        regex = r'.*\[GC \d+K->(?P<used>\d+K)\((?P<allocated>\d+K)\), \d+\.\d+ secs\]'
-        match = re.match(regex,output)
-        if match:
-            return match.groupdict()
+        if output:
+            regex = r'.*\[GC \d+K->(?P<used>\d+K)\((?P<allocated>\d+K)\), \d+\.\d+ secs\]'
+            match = re.match(regex,output)
+            if match:
+                return match.groupdict()
+            else:
+                return None
         else:
-            return "None"
+            return None
 
     def getGCInfo(self):
         """
@@ -771,13 +777,15 @@ class Connector(Stats):
         """
         file_name = os.path.join(self.path,"logs/agent.out.wrapper.log")
         output = runOSCommand("`which grep` \"Full GC\" -A1 %s | `which grep` secs | tail -n 1" % (file_name))
-        regex = r'.* (?P<start>\d+K)->(?P<end>\d+K)\(\d+K\), (?P<time>\d+\.\d+) secs\]'
-        match = re.match(regex,output)
-        if match:
-            return match.groupdict()
+        if output:
+            regex = r'.* (?P<start>\d+K)->(?P<end>\d+K)\(\d+K\), (?P<time>\d+\.\d+) secs\]'
+            match = re.match(regex,output)
+            if match:
+                return match.groupdict()
+            else:
+                return None
         else:
-            return "None"
-
+            return None
     
 
     def getLogErrors(self, type, number):
@@ -791,18 +799,21 @@ class Connector(Stats):
         elif type == "wrapper":
             path = os.path.join(self.path, "logs/agent.out.wrapper.log")
         else:
-            return "None"
+            return None
         output = runOSCommand("`which grep` ERROR %s | tail -n %s" % (path, number))
-        output = output.split("\n")
-        error_list = []
-        for i in output:
-            i = i[0:140]    # Grab first 140 characters of the error message
-            if i:
-                error_list.append(i)
-        if error_list:
-            return error_list
+        if output:
+            output = output.split("\n")
+            error_list = []
+            for i in output:
+                i = i[0:140]    # Grab first 140 characters of the error message
+                if i:
+                    error_list.append(i)
+            if error_list:
+                return error_list
+            else:
+                return None
         else:
-            return "None"
+            return None
             
     def getTypeSpecifics(self):
         """
@@ -813,7 +824,7 @@ class Connector(Stats):
         if self.type == 'windowsfg':
             return self.getTypeSpecifics_Windows()
         else:
-            return "None"
+            return None
 
     def getTypeSpecifics_Windows(self):
         """
@@ -826,7 +837,7 @@ class Connector(Stats):
         try:
             host_count = int(host_count)
         except ValueError:
-            return "<Unknown>"
+            return None
         for i in xrange(host_count):
             hostname = self.getAgentProperty("agents\[0\].windowshoststable\[%d\].hostname" % (i))
             hosts[hostname] = {}
@@ -946,19 +957,19 @@ def printData(data, indent=0):
 
 
 def sendJSON(host, index, message):
-    """    the_date = time.strftime('%Y-%m-%d',time.localtime())
+    #print message
+    the_date = time.strftime('%Y.%m.%d',time.localtime())
     url = "/stats-%s/%s/" % (the_date,index)
     conn = httplib.HTTPConnection(host,9200)
     conn.request("POST",url,message)
     response =  conn.getresponse()
-    if response.status in [200,201]:
-        print "Successfully sent data to %s" % (host)
-        print response.read()
-    else:
-        print "ERROR sending data: %s %s" % (response.status, response.reason)
-    """
-    print message
-
+    #print "http://%s:%s%s" % (host,9200,url)
+    #if response.status in [200,201]:
+    #    print "Successfully sent data to %s" % (host)
+    #    print response.read()
+    #else:
+    #    print "ERROR sending data: %s %s" % (response.status, response.reason)
+    
 
 def md5_checksum(file_name):
     """
@@ -970,7 +981,7 @@ def md5_checksum(file_name):
     try:
         open(file_name,"r")
     except:
-        return "<Unknown>"
+        return None
 
     if sys.version_info > (2,5):  # hashlib not supported in Python 2.5 or lower
         import hashlib
@@ -979,14 +990,16 @@ def md5_checksum(file_name):
         try:
             use_md5_hash.update(open(file_name).read())
         except Exception,exception_output:
-            print exception_output
-            return "<Unknown>"
+            return None
         else:
             return use_md5_hash.hexdigest().strip()
 
     else:
         output = runOSCommand("`which md5sum` " + file_name + " | cut -d \" \" -f 1")
-        return output.strip()
+        if output:
+            return output.strip()
+        else:
+            return None
 
 
 def printHelp():
@@ -1026,7 +1039,7 @@ def main():
             JSON = True
         elif i == 'cef':
             CEF = True
-        elif i.isalnum():
+        elif i.isdigit():
             SYSLOG = True
             PORT = int(i)
         elif i:
