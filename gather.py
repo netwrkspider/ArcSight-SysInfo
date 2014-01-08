@@ -382,7 +382,7 @@ class Connector(Stats):
     def __init__(self,path):
         self.headers = ["timestamp", "hostname", "type", "version", "enabled", "process status", "service", "path", "folder size",
                         "old versions", "destinations", "map files", "categorization files", "log info",
-                        "agent.log errors", "wrapper.log errors", "type specifics"]
+                        "agent.log errors", "wrapper.log errors"]#, "type specifics"]
         self.path           = path
         self.timestamp      = time.asctime()
         self.hostname       = socket.gethostname()
@@ -399,7 +399,7 @@ class Connector(Stats):
         self.log_info       = self.getLogInfo()
         self.agent_errors   = self.getLogErrors("agent",10)
         self.wrapper_errors = self.getLogErrors("wrapper",10)
-        self.specifics      = self.getTypeSpecifics()
+        #self.specifics      = self.getTypeSpecifics()
 
     def getDict(self):
         """
@@ -410,7 +410,7 @@ class Connector(Stats):
         """
         data = [self.timestamp, self.hostname, self.type, self.version, self.enabled, self.process_status, self.service,
                 self.hostname+":"+self.path, self.folder_size, self.old_versions, self.destinations,
-                self.map_files, self.cat_files, self.log_info, self.agent_errors,self.wrapper_errors, self.specifics]
+                self.map_files, self.cat_files, self.log_info, self.agent_errors,self.wrapper_errors]#, self.specifics]
         zipped_data = dict(zip(self.headers,data))
         return zipped_data
 
