@@ -705,8 +705,10 @@ class Connector(Stats):
             else:
                 #python 2.4 equivalent
                 strptime = lambda date_string, format: datetime(*(time.strptime(date_string, format)[0:6]))
-    
-            the_time = strptime(time_str, format[type])
+            if the_time is not None:
+                the_time = strptime(time_str, format[type])
+            else:
+                the_time = ""
             return the_time
 
         def max_file_name(log_path):
